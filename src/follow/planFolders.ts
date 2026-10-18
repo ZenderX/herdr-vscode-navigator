@@ -8,6 +8,7 @@ export type FolderPlan =
   | { kind: "noop"; reason: string }
   | { kind: "convert"; start: number; deleteCount: number; add: string[] }
   | { kind: "replace"; index: number; add: string[] }
+  | { kind: "reclaim"; index: number; deleteCount: number; add: string[] }
   | { kind: "append"; index: number; add: string[] }
   | { kind: "remove"; index: number };
 
@@ -17,6 +18,8 @@ export interface PlanInput {
   anchorPath: string;
   target: string;
   isMultiRoot: boolean;
+  /** True only on the first follow of a window whose index 0 is a legacy anchor and where this install has never recorded a tracked slot: folders after it are the old install's, so the target takes index 1 and the rest go. */
+  adoptedAnchor?: boolean;
   /** Required; selects the path comparison rules (Windows, case-sensitive Linux, case-insensitive macOS). */
   platform: NodeJS.Platform;
 }
@@ -28,8 +31,15 @@ function findTrackedIndex(folders: readonly FolderLike[], trackedPath: string | 
 }
 
 /** Decides the single updateWorkspaceFolders call that makes the window show the target. */
-export function planFolders({ folders, trackedPath, anchorPath, target, isMultiRoot, platform }: PlanInput): FolderPlan {
+export function planFolders({ folders, trackedPath, anchorPath, target, isMultiRoot, adoptedAnchor = false, platform }: PlanInput): FolderPlan {
   const trackedIndex = findTrackedIndex(folders, trackedPath, platform);
+
+  // The old install's tracked slot is lost with its workspaceState, so its folders linger after the anchor; this runs once, before anything is recorded.
+  // Reclaiming would re-add index 0; the stale folders stay until a different target arrives.
+  if (adoptedAnchor && samePath(target, anchorPath, platform)) return { kind: "noop", reason: "target is the adopted anchor" };
+  if (adoptedAnchor && folders.length >= 2 && !(folders.length === 2 && samePath(folders[1].path, target, platform))) {
+    return { kind: "reclaim", index: 1, deleteCount: folders.length - 1, add: [target] };
+  }
 
   const alreadyOpenIndex = folders.findIndex(({ path }) => samePath(path, target, platform));
   if (alreadyOpenIndex !== -1 && alreadyOpenIndex !== trackedIndex) {

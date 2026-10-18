@@ -17,13 +17,19 @@ import {
 import type { FolderPlan, PendingTarget } from "./follow";
 import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, Subscription } from "./herdr";
-import { classifyHosting, createCachedScan, mayFollowAutomatically, readProcessTable, withTimeout } from "./hosting";
+import { analyzeHosting, mayFollowAutomatically, readProcessTable, withTimeout } from "./hosting";
 import type { HostState } from "./hosting";
+import { resolveOnPath } from "./launch";
 import { DIAGNOSTIC_TOPICS, createLog, errorText } from "./log";
 import { samePath } from "./paths";
 import { resolveAnchor } from "./vscode/anchor";
+import { AutoLaunch } from "./vscode/autoLaunch";
+import { HostingMonitor } from "./vscode/hostingMonitor";
+import { selectAnchor } from "./vscode/anchorPath";
+import type { AnchorChoice } from "./vscode/anchorPath";
 import { affectsSettings, readSettings, setAutoFollow } from "./vscode/settings";
 import { StatusBar } from "./vscode/statusBar";
+import { createWindowTitleSync } from "./vscode/windowTitle";
 import { applyPlan, describeWorkspace, getFolders, isMultiRoot, openFolder } from "./vscode/workspaceAdapter";
 
 const PENDING_KEY = "herdrNavigator.pending";
@@ -63,6 +69,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     log("info", `last followed folder ${lastFollowed}; first switch suppressed=${followedByOwnReload}`);
     await context.globalState.update(LAST_FOLLOWED_KEY, undefined);
   }
+  const chosenAnchor = (): AnchorChoice =>
+    selectAnchor(getFolders()[0]?.path, anchorPath, context.globalStorageUri.fsPath, platform);
+  const syncWindowTitle = createWindowTitleSync({
+    platform,
+    log,
+    config: () => {
+      const windowConfig = vscode.workspace.getConfiguration("window");
+      return {
+        inspect: () => windowConfig.inspect<string>("title"),
+        update: (value) => Promise.resolve(windowConfig.update("title", value, vscode.ConfigurationTarget.Workspace)),
+      };
+    },
+  });
+  const isNavigatorWindow = (): boolean => {
+    const first = getFolders()[0]?.path;
+    return first !== undefined && isMultiRoot() && samePath(first, chosenAnchor().path, platform);
+  };
+  const refreshWindowTitle = (): void => {
+    syncWindowTitle(isNavigatorWindow()).catch((err: unknown) => log("warn", `window title: ${errorText(err)}`));
+  };
   const socketName = (): string => resolvePipeName(settings.socketPath, process.env, platform);
   const probeDeps = nodeProbeDeps();
   // A fresh client per call, like fetchSnapshot: the socket path setting can change at runtime.
@@ -115,7 +141,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshStatus(tracked);
       return true;
     },
-    onSnapshot: (snapshot) => poller.observe(snapshot),
+    onSnapshot: (snapshot) => {
+      poller.observe(snapshot);
+      void autoLaunch.observeSnapshot(snapshot).catch((err: unknown) => log("warn", `auto-launch: ${errorText(err)}`));
+    },
     persistPendingTarget: (target) => {
       const pending: PendingTarget = { target, at: Date.now(), confirmed: confirmedHere === true };
       return Promise.resolve(context.globalState.update(PENDING_KEY, pending));
@@ -131,7 +160,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     followGitRoot: settings.followGitRoot,
     getFolders,
     isMultiRoot,
-    getAnchorPath: () => anchorPath,
+    getAnchorPath: () => chosenAnchor().path,
+    // undefined means this install never recorded a slot (null is what a remove writes), so the old install's folders are still unreclaimed.
+    isAdoptedAnchor: () => chosenAnchor().adopted && context.workspaceState.get(TRACKED_KEY) === undefined,
     autoFollow: settings.autoFollow,
     debounceMs: settings.debounceMs,
     cwdSource: settings.cwdSource,
@@ -185,25 +216,60 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let dismissed = false;
   let confirming: Promise<boolean> | undefined;
 
-  const detectHosting = async (): Promise<HostState> => {
+  const detectHosting = async (terminals: readonly vscode.Terminal[]): Promise<{ state: HostState; clientPids: readonly number[] }> => {
     try {
       // A terminal whose process never launched must not stall detection; it is skipped after 2 s.
       const shellPids = (
-        await Promise.all(vscode.window.terminals.map((t) => withTimeout(t.processId, 2_000)))
+        await Promise.all(terminals.map((t) => withTimeout(t.processId, 2_000)))
       ).filter((pid): pid is number => pid !== undefined);
-      if (shellPids.length === 0) return "no";
+      if (shellPids.length === 0) return { state: "no", clientPids: [] };
       const { table, msysEdges } = await readProcessTable(platform);
-      return classifyHosting(table, shellPids, msysEdges);
+      return analyzeHosting(table, shellPids, msysEdges);
     } catch (err: unknown) {
       log("warn", `hosting detection failed: ${errorText(err)}`);
-      return "unknown";
+      return { state: "unknown", clientPids: [] };
     }
   };
 
-  // Lazy checks on focus events are rate-limited: 5 s while not hosting, 30 s to re-verify a hosting window.
-  const hostingScan = createCachedScan(detectHosting, (state) => (state === "yes" ? 30_000 : 5_000));
+  // Every hosting result is published here; lazy checks are rate-limited (5 s while not hosting, 30 s to re-verify).
+  const hostingMonitor = new HostingMonitor<vscode.Terminal>({
+    terminals: () => vscode.window.terminals,
+    scan: detectHosting,
+    now: () => Date.now(),
+  });
+  const requestHosting = (force = false): Promise<void> =>
+    hostingMonitor.request(force).then(
+      () => undefined,
+      (err: unknown) => log("warn", `hosting: ${errorText(err)}`),
+    );
 
   const autoAllowed = (): boolean => mayFollowAutomatically(host.get(), confirmedHere);
+
+  const autoLaunch = new AutoLaunch({
+    platform,
+    log,
+    clock: { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout), now: () => Date.now() },
+    memento: context.workspaceState,
+    enabled: () => vscode.workspace.getConfiguration("herdrNavigator").get<boolean>("autoLaunch", true),
+    isNavigator: isNavigatorWindow,
+    terminals: () => vscode.window.terminals,
+    createTerminal: (options) => vscode.window.createTerminal(options),
+    editorLocation: vscode.TerminalLocation.Editor,
+    resolveHerdr: () => resolveOnPath("herdr", process.platform, process.env),
+    rescan: () => requestHosting(true),
+    recheck: () => requestHosting(),
+    isAlive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (err: unknown) {
+        // EPERM means the process exists but belongs to someone else.
+        return (err as NodeJS.ErrnoException).code === "EPERM";
+      }
+    },
+    client: () => new HerdrClient({ pipeName: socketName(), log }),
+  });
+  context.subscriptions.push({ dispose: () => autoLaunch.dispose() });
 
   const suppressionReason = (): string =>
     host.get() !== "unknown"
@@ -214,13 +280,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           ? "auto-follow suppressed: hosting could not be detected; run Reconnect to be asked again"
           : "auto-follow waiting: hosting could not be detected; confirmation needed for this window";
 
-  const refreshHosting = async (): Promise<void> => {
+  hostingMonitor.subscribe(({ state, clientPids }) => {
     const was = autoAllowed();
-    host.set(await hostingScan.get(true));
-    log("info", `hosting herdr: ${host.get()}`);
+    host.set(state);
+    log("info", `hosting herdr: ${state}`);
+    void autoLaunch.onHosting(state, clientPids).catch((err: unknown) => log("warn", `auto-launch: ${errorText(err)}`));
     refreshStatus();
     if (!was && autoAllowed() && connected) controller.onFocusEvent();
-  };
+  });
 
   // When detection failed, the first automatic plan needs the user's say-so for this window; Escape declines until Reconnect.
   const confirmFollowHere = (): Promise<boolean> => {
@@ -269,7 +336,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Only a conversion forces a fresh scan; other plans reuse the rate-limited cache.
   const guardAuto = async (forceScan: boolean): Promise<boolean> => {
     if (manualFollow) return true;
-    host.set(await hostingScan.get(forceScan));
+    await requestHosting(forceScan);
     if (autoAllowed()) return true;
     return host.get() === "unknown" && (await confirmFollowHere());
   };
@@ -286,7 +353,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // The controller drops focus events while auto-follow is off, so skip the scan too.
     if (!controller.getState().autoFollow) return;
     const recheck = async (): Promise<boolean> => {
-      host.set(await hostingScan.get());
+      await requestHosting();
       if (host.get() === "unknown" && !autoAllowed()) return confirmFollowHere();
       return autoAllowed();
     };
@@ -318,11 +385,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         failureTimer = undefined;
         connected = true;
         refreshStatus();
-        void refreshHosting();
+        void requestHosting(true);
         // Events may have been missed while disconnected.
         onFocus();
       },
       onEvent: ({ event, data }) => {
+        // The daemon outlives its clients, so a client starting in an open terminal is seen only by looking again; the monitor's cache bounds the cost.
+        if (host.get() !== "yes") void requestHosting();
         routeHerdrEvent(event, {
           // Not logged: title-only pane updates are frequent; the poll logs an actual cwd change.
           pollNow: () => poller.pollNow(),
@@ -336,6 +405,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       onDisconnected: () => {
         connected = false;
         refreshStatus();
+        void autoLaunch.onHerdrDisconnected().catch((err: unknown) => log("warn", `auto-launch: ${errorText(err)}`));
         failureTimer ??= setTimeout(() => {
           void vscode.window.showWarningMessage("Herdr Navigator cannot reach herdr; see the Herdr Navigator output.");
         }, FAILURE_WARNING_MS);
@@ -364,8 +434,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         log("info", `diagnostics: last ${topic} -> ${diagnostics.last(topic) ?? "none yet"}`);
       }
     }),
-    vscode.window.onDidOpenTerminal(() => void refreshHosting()),
-    vscode.window.onDidCloseTerminal(() => void refreshHosting()),
+    vscode.window.onDidOpenTerminal((terminal) => {
+      autoLaunch.onTerminalOpened(terminal);
+      void requestHosting(true);
+    }),
+    vscode.window.onDidCloseTerminal((terminal) => {
+      const reason = terminal.exitStatus?.reason;
+      autoLaunch.onTerminalClosed(
+        reason === vscode.TerminalExitReason.Shutdown ? "shutdown" : reason === vscode.TerminalExitReason.User ? "user" : "other",
+      );
+      void requestHosting(true);
+    }),
     vscode.commands.registerCommand("herdrNavigator.toggleAutoFollow", () =>
       setAutoFollow(!controller.getState().autoFollow),
     ),
@@ -373,11 +452,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       dismissed = false;
       confirmedHere = undefined;
       void context.workspaceState.update(CONFIRM_KEY, undefined);
-      void refreshHosting();
+      void requestHosting(true);
       startSubscription();
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => refreshStatus()),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      refreshStatus();
+      refreshWindowTitle();
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("window.title")) refreshWindowTitle();
       if (!affectsSettings(event)) return;
       const previous = settings;
       settings = readSettings();
@@ -393,8 +476,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   refreshStatus();
+  refreshWindowTitle();
+  autoLaunch.start();
   startSubscription();
-  void refreshHosting();
+  void requestHosting(true);
 }
 
 export function deactivate(): void {}

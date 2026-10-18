@@ -33,7 +33,7 @@ Single workspace / tab / pane at capture time. Focused ids: `focused_workspace_i
 ```json
 {"focused_workspace_id":"w4","focused_tab_id":"w4:t1","focused_pane_id":"w4:p1",
  "panes":[{"pane_id":"w4:p1","tab_id":"w4:t1","workspace_id":"w4","terminal_id":"term_65e0b61021db910","focused":true,
-           "cwd":"C:\\Users\\me\\"}]}
+           "cwd":"C:\\Users\\<you>\\"}]}
 ```
 
 Pane `cwd` verbatim: `C:\Users\<you>\` (JSON-escaped above). `foreground_cwd`: key absent from the pane object (not even `null`). Workspace `label` was `~`; workspaces and tabs carry no cwd.
@@ -53,6 +53,14 @@ result: { type: "pane_process_info", process_info: { pane_id, shell_pid, foregro
 - `shell_pid`: for a Git Bash pane this is the native launcher `Git\bin\bash.exe`, which has no MSYS `/proc` entry; the real MSYS bash is its Windows child.
 - `foreground_process_group_id`: optional; never present on Windows.
 - `foreground_processes[].cwd`: optional; on Windows it does not reliably track a later `cd`.
+
+## workspace.focus
+
+Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no live request was sent. This is the only request the extension sends that changes herdr state (used by auto-launch to re-select a space).
+
+- Request: `{ "id": "<id>", "method": "workspace.focus", "params": { "workspace_id": "<id>" } }` (`params` is `WorkspaceTarget`, `workspace_id` required string).
+- Response: success result type not isolated in the schema (likely `workspace_info`); the client ignores the payload and rejects on an error envelope.
+- Ids such as `w4` are not stable across a herdr restore, so the extension stores the workspace `label` and maps it to an id from `session.snapshot` before focusing.
 
 ## Update events
 

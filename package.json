@@ -1,6 +1,7 @@
 {
   "name": "herdr-navigator",
   "displayName": "Herdr Navigator",
+  "icon": "images/icon.png",
   "description": "Switches the VS Code workspace folder to the working directory of the focused herdr pane.",
   "version": "0.1.0",
   "publisher": "z3nder",
@@ -122,6 +123,12 @@
           "default": true,
           "scope": "window",
           "description": "Resolve the live directory of the focused herdr pane from its shell process: Linux /proc, macOS lsof, Windows Git Bash via its MSYS runtime."
+        },
+        "herdrNavigator.autoLaunch": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Relaunch herdr in an editor-area terminal when VS Code restores a navigator window in which herdr was running."
         },
         "herdrNavigator.gitBashPath": {
           "type": "string",

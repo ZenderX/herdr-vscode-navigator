@@ -13,9 +13,10 @@ import type {
   SubscriptionHandlers,
 } from "./types";
 
-// Read-only methods only; keeps any mutating herdr call impossible by construction.
+// Read-only methods plus workspace.focus (focus only; never mutates herdr content).
 const ALLOWED_METHODS: ReadonlySet<string> = new Set([
   "ping",
+  "workspace.focus",
   "session.snapshot",
   "pane.get",
   "pane.list",
@@ -42,6 +43,27 @@ function toEvent(line: Record<string, unknown>): HerdrEvent | null {
   const { event, data } = candidate;
   if (typeof event !== "string") return null;
   return { event, data: isRecord(data) ? data : {} };
+}
+
+function workspaceIdOf(workspace: Record<string, unknown>): string | undefined {
+  return typeof workspace.workspace_id === "string" ? workspace.workspace_id : undefined;
+}
+
+/**
+ * Maps a space label to its workspace id: exact match first, then case-insensitive.
+ * Several candidates are narrowed to the one holding a pane whose cwd equals `lastFolder`;
+ * anything still ambiguous or absent yields undefined.
+ */
+export function findWorkspaceIdByLabel(snapshot: SessionSnapshot, label: string, lastFolder?: string): string | undefined {
+  const labelled = snapshot.workspaces.filter((workspace) => typeof workspace.label === "string");
+  const exact = labelled.filter((workspace) => workspace.label === label);
+  const candidates = exact.length > 0 ? exact : labelled.filter((workspace) => String(workspace.label).toLowerCase() === label.toLowerCase());
+  const ids = candidates.map(workspaceIdOf).filter((id): id is string => id !== undefined);
+  if (ids.length <= 1) return ids[0];
+  if (lastFolder === undefined) return undefined;
+
+  const holding = ids.filter((id) => snapshot.panes.some(({ workspace_id, cwd }) => workspace_id === id && cwd === lastFolder));
+  return holding.length === 1 ? holding[0] : undefined;
 }
 
 export class HerdrClient {
@@ -120,6 +142,10 @@ export class HerdrClient {
       throw new Error("herdr pane.process_info returned no shell_pid");
     }
     return result.process_info as PaneProcessInfo;
+  }
+
+  async focusWorkspace(workspaceId: string, options?: RequestOptions): Promise<void> {
+    await this.request("workspace.focus", { workspace_id: workspaceId }, options);
   }
 
   /** Long-lived subscription that reconnects with jittered exponential backoff until disposed. */

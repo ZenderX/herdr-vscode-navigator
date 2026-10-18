@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import {
+  analyzeHosting,
   classifyHosting,
   createCachedScan,
   mayFollowAutomatically,
@@ -115,6 +116,8 @@ describe("classifyHosting", () => {
 
   it("follows MSYS parent links past a dead Windows parent", () => {
     assert.equal(classifyHosting(gitBashTable, [35640], msys), "yes");
+    // The native herdr.exe pid, not the server's, is what the exit watcher probes.
+    assert.deepEqual(analyzeHosting(gitBashTable, [35640], msys), { state: "yes", clientPids: [23016] });
   });
 
   it("still rejects another window's shell when the MSYS link is known", () => {

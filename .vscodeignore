@@ -11,3 +11,4 @@ eslint.config.mjs
 node_modules/**
 **/*.map
 bash.exe.stackdump
+private/**

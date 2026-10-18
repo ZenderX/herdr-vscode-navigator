@@ -1,9 +1,8 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { openFolderInWindow } from "../follow";
+import { openFolderInWindow, resolveMutation } from "../follow";
 import type { FolderLike, FolderPlan } from "../follow";
 import type { Logger } from "../herdr";
-import { samePath } from "../paths";
 
 const FOLDERS_EVENT_TIMEOUT_MS = 5000;
 
@@ -71,35 +70,18 @@ export async function openFolder(target: string): Promise<void> {
 export async function applyPlan(plan: FolderPlan, log: Logger): Promise<boolean> {
   if (plan.kind === "noop") return true;
 
-  let start: number;
-  let deleteCount: number;
-  let add: string[] = [];
-  switch (plan.kind) {
-    case "convert":
-      ({ start, deleteCount, add } = plan);
-      void vscode.window.showInformationMessage(
-        "Herdr Navigator is adding a folder to this window; extensions restart once; shell terminals are expected to keep running.",
-      );
-      break;
-    case "replace":
-      ({ index: start, add } = plan);
-      deleteCount = 1;
-      break;
-    case "append":
-      ({ index: start, add } = plan);
-      deleteCount = 0;
-      break;
-    case "remove":
-      start = plan.index;
-      deleteCount = 1;
-      break;
-  }
-
   const existing = getFolders();
-  const alreadyPresent = add.filter((p) => existing.some(({ path: open }) => samePath(open, p, process.platform)));
-  if (plan.kind !== "convert" && alreadyPresent.length > 0) {
-    log("info", `mutation: already present, nothing to do: ${alreadyPresent.join(", ")}`);
-    return true;
+  const mutation = resolveMutation(plan, existing.map(({ path: open }) => open), process.platform);
+  if (mutation === null) {
+    log("info", `mutation: already present, nothing to do: ${plan.kind === "remove" ? "" : plan.add.join(", ")}`);
+    // A skipped reclaim must not end adoption, so the caller must not record a tracked slot.
+    return plan.kind !== "reclaim";
+  }
+  const { start, deleteCount, add } = mutation;
+  if (plan.kind === "convert") {
+    void vscode.window.showInformationMessage(
+      "Herdr Navigator is adding a folder to this window; extensions restart once; shell terminals are expected to keep running.",
+    );
   }
 
   const uris = toFolders(add).map(({ uri }) => uri.toString());

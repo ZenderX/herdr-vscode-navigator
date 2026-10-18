@@ -1,9 +1,9 @@
 import * as assert from "node:assert/strict";
 import * as net from "node:net";
-import { HerdrClient } from "../../../herdr/client";
+import { findWorkspaceIdByLabel, HerdrClient } from "../../../herdr/client";
 import { LineSplitter } from "../../../herdr/framing";
 import { resolvePipeName } from "../../../herdr/pipe";
-import type { HerdrEvent } from "../../../herdr/types";
+import type { HerdrEvent, PaneInfo, SessionSnapshot } from "../../../herdr/types";
 
 let serverCounter = 0;
 
@@ -120,6 +120,20 @@ describe("HerdrClient", () => {
       await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).processInfo("w1:p1"), /no shell_pid/);
     });
 
+    it("focusWorkspace sends workspace.focus with workspace_id", async () => {
+      server = await startServer((req, socket) => reply(socket, req.id, { type: "workspace_info", workspace: { workspace_id: "w4" } }));
+      await new HerdrClient({ pipeName: server.pipeName }).focusWorkspace("w4");
+      assert.equal(server.requests[0].method, "workspace.focus");
+      assert.deepEqual(server.requests[0].params, { workspace_id: "w4" });
+    });
+
+    it("focusWorkspace rejects on an error envelope", async () => {
+      server = await startServer((req, socket) =>
+        socket.write(`${JSON.stringify({ id: req.id, error: { code: "workspace_not_found", message: "gone" } })}\n`),
+      );
+      await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).focusWorkspace("w9"), /workspace_not_found: gone/);
+    });
+
     it("still rejects write-style methods next to pane.process_info", async () => {
       server = await startServer(() => undefined);
       await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).request("pane.close"), /not allowed/);
@@ -213,6 +227,55 @@ describe("HerdrClient", () => {
       await new Promise((r) => setTimeout(r, 150));
       assert.equal(server.connections.length, 1);
     });
+  });
+});
+
+describe("findWorkspaceIdByLabel", () => {
+  const pane = (workspace_id: string, cwd: string): PaneInfo => ({
+    pane_id: `${workspace_id}:p1`,
+    terminal_id: "t",
+    workspace_id,
+    tab_id: `${workspace_id}:t1`,
+    focused: false,
+    cwd,
+  });
+  const snapshot = (workspaces: Record<string, unknown>[], panes: PaneInfo[] = []): SessionSnapshot => ({
+    focused_workspace_id: null,
+    focused_tab_id: null,
+    focused_pane_id: null,
+    panes,
+    tabs: [],
+    workspaces,
+  });
+
+  it("matches the exact label", () => {
+    const snap = snapshot([{ workspace_id: "w1", label: "alpha" }, { workspace_id: "w2", label: "Alpha" }]);
+    assert.equal(findWorkspaceIdByLabel(snap, "Alpha"), "w2");
+  });
+
+  it("falls back to a case-insensitive match", () => {
+    assert.equal(findWorkspaceIdByLabel(snapshot([{ workspace_id: "w3", label: "Docs" }]), "docs"), "w3");
+  });
+
+  it("returns undefined for a missing label", () => {
+    assert.equal(findWorkspaceIdByLabel(snapshot([{ workspace_id: "w1", label: "a" }]), "b"), undefined);
+  });
+
+  it("disambiguates duplicate labels by the pane cwd matching lastFolder", () => {
+    const snap = snapshot(
+      [{ workspace_id: "w1", label: "x" }, { workspace_id: "w2", label: "x" }],
+      [pane("w1", "C:\\a"), pane("w2", "C:\\b")],
+    );
+    assert.equal(findWorkspaceIdByLabel(snap, "x", "C:\\b"), "w2");
+  });
+
+  it("returns undefined for duplicates it cannot resolve", () => {
+    const snap = snapshot(
+      [{ workspace_id: "w1", label: "x" }, { workspace_id: "w2", label: "x" }],
+      [pane("w1", "C:\\a"), pane("w2", "C:\\b")],
+    );
+    assert.equal(findWorkspaceIdByLabel(snap, "x"), undefined);
+    assert.equal(findWorkspaceIdByLabel(snap, "x", "C:\\c"), undefined);
   });
 });
 

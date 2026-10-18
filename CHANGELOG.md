@@ -2,18 +2,14 @@
 
 ## Unreleased
 
-- Removed the new-terminal handling added earlier in this release (anchor-folder terminal cwd, the Ctrl+Shift+` command, its consent prompt and terminal diagnostics).
-- The extension now follows a `cd` in the focused herdr pane, not only focus changes: it polls the pane's directory every `herdrNavigator.cwdPollMs` milliseconds (new setting, default `1000`, minimum 250, `0` disables) while this window hosts herdr and auto-follow is on. A `pane.updated` or `workspace.created` event from herdr triggers an immediate check.
-- `docs/shell-integration.md` recommends the verified OSC 7 snippet for Git Bash on Windows.
-- New setting `herdrNavigator.followGitRoot` (default `true`): the followed directory snaps to the root of its Git repository (nearest ancestor with a `.git` file or directory); outside a repository the exact directory is followed.
-- New setting `herdrNavigator.followMode` (`workspace` default, or `folder`). `folder` opens the followed directory as the window's single folder in the same window, so Source Control shows only that folder's repository; it reloads the window on every switch (about 850 ms measured) and VS Code closes the integrated terminal each time.
-- `workspace` mode keeps the no-reload behaviour, now always with an extension-owned empty anchor folder.
-- Removed the `herdrNavigator.anchorFolder` setting; the anchor is always the extension-owned empty directory.
-- `folder` mode asks for a one-time modal confirmation ("Switch folder") before the first reload; Cancel abandons that switch and the confirmation reappears until accepted once.
-
-## 0.1.0
-
-- Initial release: follows the focused herdr pane's working directory via an anchor folder plus a replaceable second workspace root.
-- Commands: follow now, toggle auto-follow, reconnect; two-step chord keybinding; status bar item.
-- Settings: `autoFollow`, `socketPath`, `cwdSource`, `anchorFolder`, `debounceMs`.
-- The first switch in a single-folder or empty window restarts extensions once.
+- Initial release: follows the focused herdr pane's working directory, so the editor's file tree tracks herdr's focus.
+- Follow modes (`herdrNavigator.followMode`): `workspace` (default) keeps an extension-owned empty anchor folder plus a replaceable second root with no reloads after the first conversion; `folder` opens the followed directory as the window's single folder, which reloads the window on every switch.
+- Git-root following (`herdrNavigator.followGitRoot`, default on): the followed directory snaps to the root of its Git repository; outside a repository the exact directory is followed.
+- `cd` following: the extension polls the focused pane's directory every `herdrNavigator.cwdPollMs` milliseconds (default `1000`, minimum 250, `0` disables) while this window hosts herdr and auto-follow is on.
+- Live cwd probe (`herdrNavigator.liveCwdProbe`, default on): resolves the focused pane's live directory from its shell process on Linux, macOS and Windows (Git Bash via `herdrNavigator.gitBashPath`).
+- Commands: follow now, toggle auto-follow, reconnect, show diagnostics; two-step chord keybinding; status bar item.
+- Settings: `autoFollow`, `socketPath`, `cwdSource`, `followMode`, `followGitRoot`, `debounceMs`, `cwdPollMs`, `liveCwdProbe`, `gitBashPath`.
+- Cross-platform: Windows named pipe, and a Unix socket on Linux and macOS.
+- Window title: a navigator window shows `herdr-navigation (Workspace)` instead of `Untitled (Workspace)`, written to the workspace-scope `window.title` only.
+- Auto-launch (`herdrNavigator.autoLaunch`, default on): when VS Code restores a navigator window in which herdr was running, herdr is relaunched in an editor-area terminal (reusing the revived `herdr` tab) and the previously selected space is focused again via `workspace.focus`.
+- `docs/shell-integration.md` recommends an optional OSC 7 snippet for Git Bash on Windows.

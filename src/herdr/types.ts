@@ -28,6 +28,9 @@ export interface PingResult {
   [key: string]: unknown;
 }
 
+// `herdr api schema --json` (herdr 0.9.5, protocol 22): request { method: "workspace.focus", params: WorkspaceTarget },
+// WorkspaceTarget = { properties: { workspace_id: { type: "string" } }, required: ["workspace_id"], type: "object" }.
+// The success result is not parsed; focusWorkspace only awaits it.
 export interface ForegroundProcess {
   pid: number;
   name: string;

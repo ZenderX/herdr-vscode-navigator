@@ -1,4 +1,4 @@
-export { HerdrClient } from "./client";
+export { findWorkspaceIdByLabel, HerdrClient } from "./client";
 export { resolvePipeName } from "./pipe";
 export type {
   BackoffOptions,

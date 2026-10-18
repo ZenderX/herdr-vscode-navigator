@@ -29,6 +29,35 @@ Manual procedure. Needs herdr 0.9.5 and two directories, `A` and `B`, that you c
 9. Close the window (choose Don't Save if prompted for the untitled workspace), then reopen the repository.
    Expected: the window opens as a single folder; once a terminal runs herdr, the extension detects hosting, reconnects, and the first follow converts the window to multi-root again. A second VS Code window with no herdr in its terminal never converts on its own.
 
+## Window title
+
+Install the packaged VSIX and run it in a normal window; never press F5 for these checks (no debug sessions).
+
+1. Convert a window to a navigator window (steps 1 to 3 above).
+   Expected: the title bar shows `herdr-navigation (Workspace)`, and the output channel has `window title: wrote ...`.
+
+## Session restore
+
+Needs herdr on PATH and `herdrNavigator.autoLaunch` on (default). Use the installed VSIX in a normal window, not F5.
+
+1. In a navigator window, run herdr in an integrated terminal, select a space other than the first, and wait a few seconds so the extension sees it.
+2. Quit VS Code fully (all windows), then relaunch it so it restores the window.
+   Expected: a herdr tab in the editor area, no duplicate herdr tab, and the previously selected space focused (or, if herdr did not restore its session, a shell started in the focused herdr pane's last directory).
+   Note: herdr's server keeps running in the background after VS Code quits, so relaunching usually re-attaches to the same spaces.
+3. Negative: leave herdr with its detach key (`prefix+q`, see `herdr --default-config`), wait at least 15 seconds, quit VS Code, relaunch.
+   Why: the detach is only seen by the client-exit poll (up to 2 s), then two hosting scans (each up to a few seconds on Windows) separated by a 5 s confirm. The output channel shows `hosting herdr: no` when the first rescan sees the detach; count the wait from then. Do not quit until the log shows `auto-launch: record herdrWasRunning=false (hostingLost herdr-exited)`; quitting sooner still counts as herdr running and the relaunch fires.
+   Expected: no herdr launch; the log has `auto-launch: none ...` with reason `not-restored`.
+4. Negative: set `herdrNavigator.autoLaunch` to `false`, repeat step 1 and 2.
+   Expected: no herdr launch; the log has reason `disabled`.
+
+Paste back these output channel lines:
+
+- `auto-launch:` decision line (action and reason).
+- `auto-launch: terminal seen <name> interacted=<bool> at +<ms>` lines (answers whether revived terminals exist at activation or arrive later).
+- `auto-launch: record herdrWasRunning=` lines and `hosting herdr:` lines.
+- `window title:` lines.
+- Whether herdr restored its own session or started fresh.
+
 ## Diagnosing a follow with the log
 
 1. Install the packaged VSIX (`npm run package`, then `code --install-extension herdr-navigator-0.1.0.vsix`) and reload the window.

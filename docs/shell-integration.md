@@ -43,7 +43,7 @@ case ";${PROMPT_COMMAND};" in
 esac
 ```
 
-Emits for example `file://HOST/c/Users/me/my%20dir`.
+Emits for example `file://HOST/c/Users/you/my%20dir`.
 
 ### Variant B: Windows path (`pwd -W`)
 
@@ -55,7 +55,7 @@ case ";${PROMPT_COMMAND};" in
 esac
 ```
 
-Emits for example `file:///C:/Users/me/my%20dir`.
+Emits for example `file:///C:/Users/you/my%20dir`.
 
 ## Verify
 

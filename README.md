@@ -65,6 +65,21 @@ In `folder` mode the first switch shows a modal confirmation (`FOLDER_SWITCH_NOT
 - Later switches replace the second root in place with no restart.
 - VS Code may ask to save the untitled workspace when you close the window.
 
+### Window title
+
+In a navigator window the title bar reads `herdr-navigation (Workspace)` instead of `Untitled (Workspace)`. The extension writes your effective `window.title` template (with `${rootName}` replaced) to the workspace settings of the untitled workspace only: no `.code-workspace` file is saved and your user settings are never touched. A workspace-level `window.title` you set yourself is left alone.
+
+### Auto-launch
+
+`herdrNavigator.autoLaunch` (default on) relaunches herdr when VS Code restores a navigator window. It fires only when all of these hold:
+
+- the window is a navigator window restored from a previous session;
+- herdr was running in it when VS Code closed;
+- nothing in this window hosts herdr now;
+- `herdr` is on PATH.
+
+It does not fire on the first conversion, after you leave herdr (detach, `prefix+q`) before closing, or when `herdr` is not on PATH (one `auto-launch:` log line, no popup). Leaving herdr takes roughly 10 seconds to register; quitting VS Code sooner still counts as herdr running. If the revived `herdr` terminal tab is present it is reused; otherwise a terminal is opened in the editor area using the default terminal profile, and `herdr` is typed into it. The last selected herdr space is then focused again by its label, and the terminal starts in the focused herdr pane's last directory, used only as a fallback when herdr does not restore its own session.
+
 ### Side effects
 
 - The one-time conversion restarts the extension host, and the Claude Code VS Code extension restarts with it and picks a new IDE port (its lock file `~/.claude/ide/<port>.lock` changes, for example 41232 to 41117). Claude Code sessions already running in herdr panes may lose their IDE link until you run `/ide` in them; new terminals get the new port.
@@ -92,6 +107,7 @@ A status bar item on the left shows `herdr: <folder>` or `herdr: disconnected`; 
 | `herdrNavigator.cwdSource` | `auto` | `auto` (foreground process cwd if known, else pane cwd), `pane`, or `foreground` |
 | `herdrNavigator.followMode` | `workspace` | `workspace` (untitled multi-root, no reloads) or `folder` (single folder, reloads the window and closes the terminal on every switch) |
 | `herdrNavigator.followGitRoot` | `true` | Follow the Git repository root containing the focused pane's directory instead of the exact directory |
+| `herdrNavigator.autoLaunch` | `true` | Relaunch herdr in an editor-area terminal when VS Code restores a navigator window in which herdr was running |
 | `herdrNavigator.debounceMs` | `150` | Milliseconds to coalesce bursts of focus events |
 | `herdrNavigator.cwdPollMs` | `1000` | Milliseconds between checks for a `cd` in the focused pane (minimum 250; `0` disables) |
 | `herdrNavigator.liveCwdProbe` | `true` | Resolve the focused pane's live directory from its shell process |
@@ -127,4 +143,4 @@ If the directory is stale, open "Herdr Navigator: Show Diagnostics" and read the
 
 ## Privacy and safety
 
-The extension talks only to the local herdr pipe and uses a read-only whitelist of requests: `ping`, `session.snapshot`, `pane.get`, `pane.list`, `events.subscribe`. It never changes herdr state and never writes under `%APPDATA%\herdr`.
+The extension talks only to the local herdr pipe and uses a whitelist of requests: `ping`, `session.snapshot`, `pane.get`, `pane.list`, `events.subscribe`, plus `workspace.focus`, sent only by auto-launch to re-select the space that was selected before VS Code closed. It never writes under `%APPDATA%\herdr`.

@@ -14,6 +14,8 @@ export { FOLDER_SWITCH_CONFIRM, FOLDER_SWITCH_NOTICE, openFolderInWindow, switch
 export type { SwitchFolderDeps } from "./switchFolder";
 export { planFolders } from "./planFolders";
 export type { FolderLike, FolderPlan, PlanInput } from "./planFolders";
+export { resolveMutation } from "./resolveMutation";
+export type { Mutation } from "./resolveMutation";
 export { findGitRoot } from "./gitRoot";
 export type { GitRootDeps } from "./gitRoot";
 export { resolveTarget } from "./resolveTarget";

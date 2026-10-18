@@ -109,6 +109,34 @@ describe("FollowController", () => {
     assert.equal(h.controller.getState().trackedPath, "C:\\one");
   });
 
+  it("forwards isAdoptedAnchor to the planner so stale folders after a legacy anchor are reclaimed", async () => {
+    const clock = new FakeClock();
+    const plans: FolderPlan[] = [];
+    const controller = new FollowController({
+      platform: "win32",
+      fetchSnapshot: async () => snap("C:\\one"),
+      applyPlan: async (plan) => {
+        plans.push(plan);
+        return true;
+      },
+      persistPendingTarget: async () => undefined,
+      switchFolder: async () => false,
+      getFolders: () => [{ path: "C:\\legacy" }, { path: "C:\\stale" }, { path: "C:\\tracked" }],
+      isMultiRoot: () => true,
+      getAnchorPath: () => "C:\\legacy",
+      isAdoptedAnchor: () => true,
+      autoFollow: true,
+      debounceMs: 100,
+      cwdSource: "auto",
+      clock,
+    });
+    controller.setTrackedPath("C:\\tracked");
+    controller.onFocusEvent();
+    clock.advance(100);
+    await controller.whenIdle();
+    assert.deepEqual(plans, [{ kind: "reclaim", index: 1, deleteCount: 2, add: ["C:\\one"] }]);
+  });
+
   it("serializes: an event during an in-flight apply waits and uses the latest target", async () => {
     const h = harness();
     h.gate.hold = true;

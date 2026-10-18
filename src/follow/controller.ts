@@ -49,6 +49,8 @@ export interface FollowControllerOptions {
   getFolders: () => readonly FolderLike[];
   isMultiRoot: () => boolean;
   getAnchorPath: () => string;
+  /** True when the anchor path is a legacy anchor adopted from index 0. */
+  isAdoptedAnchor?: () => boolean;
   autoFollow: boolean;
   debounceMs: number;
   cwdSource: CwdSource;
@@ -79,6 +81,8 @@ function describePlan(plan: FolderPlan): string {
     case "replace":
     case "append":
       return `${plan.kind}: index ${plan.index} -> ${plan.add.join(", ")}`;
+    case "reclaim":
+      return `reclaim: index ${plan.index} (delete ${plan.deleteCount}) -> ${plan.add.join(", ")}`;
     case "remove":
       return `remove: index ${plan.index}`;
   }
@@ -292,6 +296,7 @@ export class FollowController {
         anchorPath: this.options.getAnchorPath(),
         target,
         isMultiRoot: this.options.isMultiRoot(),
+        adoptedAnchor: this.options.isAdoptedAnchor?.() ?? false,
         platform: this.options.platform,
       });
       log?.("info", `plan: ${describePlan(plan)}`);

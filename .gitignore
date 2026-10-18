@@ -3,3 +3,19 @@ out/
 *.vsix
 bash.exe.stackdump
 .vscode-test/
+
+# Job folders, active and archived
+.claude/conductor/jobs/
+
+# Per-user agent memory and machine-local state
+.claude/agent-memory/
+.claude/conductor/environment.md
+.claude/settings.local.json
+
+# Python bytecode caches
+__pycache__/
+*.pyc
+
+# OS cruft
+.DS_Store
+

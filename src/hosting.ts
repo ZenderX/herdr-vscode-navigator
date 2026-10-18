@@ -89,8 +89,17 @@ export function classifyHosting(
   shellPids: readonly number[],
   msysEdges: readonly MsysEdge[] = [],
 ): HostState {
+  return analyzeHosting(table, shellPids, msysEdges).state;
+}
+
+/** Like classifyHosting, also returning the native pids of the herdr clients that descend from a shell. */
+export function analyzeHosting(
+  table: readonly ProcessInfo[],
+  shellPids: readonly number[],
+  msysEdges: readonly MsysEdge[] = [],
+): { state: HostState; clientPids: number[] } {
   const shells = new Set(shellPids);
-  if (shells.size === 0) return "no";
+  if (shells.size === 0) return { state: "no", clientPids: [] };
   const byPid = new Map(table.map((p) => [p.pid, p]));
   const parents = new Map<number, number[]>();
   const link = (child: number, parent: number): void => {
@@ -104,6 +113,7 @@ export function classifyHosting(
     ({ name, commandLine }) => name.toLowerCase().replace(/\.exe$/, "") === HERDR_PROCESS && !/\bserver\b/.test(commandLine ?? ""),
   );
   let broken = false;
+  const clientPids: number[] = [];
   for (const { pid } of clients) {
     // The visited set guards against parent loops caused by pid reuse.
     const seen = new Set<number>();
@@ -111,7 +121,10 @@ export function classifyHosting(
     for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
       if (seen.has(current)) continue;
       seen.add(current);
-      if (shells.has(current)) return "yes";
+      if (shells.has(current)) {
+        clientPids.push(pid);
+        break;
+      }
       for (const parent of parents.get(current) ?? []) {
         stack.push(parent);
         const info = byPid.get(current);
@@ -121,7 +134,8 @@ export function classifyHosting(
       }
     }
   }
-  return broken ? "unknown" : "no";
+  if (clientPids.length > 0) return { state: "yes", clientPids };
+  return { state: broken ? "unknown" : "no", clientPids: [] };
 }
 
 /** Whether automatic plans of any kind may run: a hosting window, or an undetectable one the user confirmed. */

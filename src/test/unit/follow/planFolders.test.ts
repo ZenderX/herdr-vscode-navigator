@@ -135,6 +135,68 @@ describe("planFolders", () => {
     });
   });
 
+  describe("adopted legacy anchor", () => {
+    const legacy = "c:\\Users\\me\\AppData\\Roaming\\Code\\User\\globalStorage\\old.herdr-navigator\\anchor";
+    const stale = "c:\\Users\\me\\.herdr\\worktrees\\stale-feature";
+    const tracked = "c:\\Users\\me\\Documents\\Projects\\herdr-vscode-navigator";
+    const base = { anchorPath: legacy, adoptedAnchor: true, isMultiRoot: true } as const;
+
+    it("reclaims index 1 and drops stale folders without touching index 0", () => {
+      const plan = planFolders({ ...base, folders: folders(legacy, stale, tracked), trackedPath: tracked, target: "C:\\Users\\me\\Documents\\Projects\\other-repo" });
+      assert.deepEqual(plan, { kind: "reclaim", index: 1, deleteCount: 2, add: ["C:\\Users\\me\\Documents\\Projects\\other-repo"] });
+    });
+
+    it("reclaims an untracked folder at index 1 instead of appending after it", () => {
+      const plan = planFolders({ ...base, folders: folders(legacy, stale), trackedPath: null, target: "C:\\t" });
+      assert.deepEqual(plan, { kind: "reclaim", index: 1, deleteCount: 1, add: ["C:\\t"] });
+    });
+
+    it("converges when the target is already open among stale folders", () => {
+      const plan = planFolders({ ...base, folders: folders(legacy, stale, tracked), trackedPath: tracked, target: tracked });
+      assert.deepEqual(plan, { kind: "reclaim", index: 1, deleteCount: 2, add: [tracked] });
+    });
+
+    it("noops when the target is the adopted anchor, keeping adoption pending", () => {
+      assert.equal(planFolders({ ...base, folders: folders(legacy, stale, tracked), trackedPath: tracked, target: legacy }).kind, "noop");
+      assert.equal(planFolders({ ...base, folders: folders(legacy, stale, tracked), trackedPath: tracked, target: legacy.toUpperCase() + "\\" }).kind, "noop");
+    });
+
+    it("is a noop when the target already is the only folder after the anchor", () => {
+      const plan = planFolders({ ...base, folders: folders(legacy, tracked), trackedPath: null, target: tracked });
+      assert.equal(plan.kind, "noop");
+    });
+
+    // After the first reclaim the extension stops passing adoptedAnchor, so the window plans like an own-anchor one.
+    it("keeps a user-added folder once adoption is over (follow it, then the next target)", () => {
+      const user = "C:\\user";
+      const own = { ...base, adoptedAnchor: false };
+      assert.deepEqual(planFolders({ ...own, folders: folders(legacy, tracked, user), trackedPath: tracked, target: user }), { kind: "remove", index: 1 });
+      assert.deepEqual(planFolders({ ...own, folders: folders(legacy, user), trackedPath: null, target: "C:\\t2" }), { kind: "append", index: 2, add: ["C:\\t2"] });
+    });
+
+    it("appends rather than reclaims when the tracked path is gone after adoption is over", () => {
+      const plan = planFolders({ ...base, adoptedAnchor: false, folders: folders(legacy, "C:\\Mine", "C:\\Other"), trackedPath: "C:\\Gone", target: "C:\\New" });
+      assert.deepEqual(plan, { kind: "append", index: 3, add: ["C:\\New"] });
+    });
+
+    it("treats a legacy-looking folder at index 1 as an ordinary folder", () => {
+      const own = "C:\\storage\\z3nder.herdr-navigator\\anchor";
+      const input = { anchorPath: own, adoptedAnchor: false, isMultiRoot: true, target: "C:\\t" } as const;
+      assert.deepEqual(planFolders({ ...input, folders: folders(own, legacy), trackedPath: legacy }), { kind: "replace", index: 1, add: ["C:\\t"] });
+      assert.deepEqual(planFolders({ ...input, folders: folders(own, legacy), trackedPath: null }), { kind: "append", index: 2, add: ["C:\\t"] });
+    });
+
+    it("appends after a lone legacy anchor in a multi-root window", () => {
+      const plan = planFolders({ ...base, folders: folders(legacy), trackedPath: null, target: "C:\\t" });
+      assert.deepEqual(plan, { kind: "append", index: 1, add: ["C:\\t"] });
+    });
+
+    it("keeps user folders after the tracked slot when the anchor is not adopted", () => {
+      const plan = planFolders({ ...base, adoptedAnchor: false, folders: folders(legacy, stale, tracked), trackedPath: tracked, target: "C:\\t" });
+      assert.deepEqual(plan, { kind: "replace", index: 2, add: ["C:\\t"] });
+    });
+  });
+
   it("emits exactly one folder in each add list", () => {
     const plan = planFolders({ folders: folders(ANCHOR, "C:\\old"), trackedPath: "C:\\old", anchorPath: ANCHOR, target: "C:\\new", isMultiRoot: true });
     assert.ok(plan.kind === "replace" && plan.add.length === 1);
