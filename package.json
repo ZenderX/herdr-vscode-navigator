@@ -5,6 +5,23 @@
   "version": "0.1.0",
   "publisher": "z3nder",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ZenderX/herdr-vscode-navigator.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ZenderX/herdr-vscode-navigator/issues"
+  },
+  "homepage": "https://github.com/ZenderX/herdr-vscode-navigator#readme",
+  "keywords": [
+    "herdr",
+    "terminal multiplexer",
+    "workspace",
+    "follow",
+    "cwd",
+    "terminal",
+    "folder"
+  ],
   "engines": {
     "vscode": "^1.142.0"
   },
@@ -120,7 +137,7 @@
     "watch": "tsc -watch -p ./",
     "lint": "eslint src",
     "test": "npm run compile && mocha \"out/test/unit/**/*.test.js\"",
-    "package": "vsce package --allow-missing-repository --skip-license --no-dependencies"
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

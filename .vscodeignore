@@ -5,6 +5,8 @@ docs/**
 .vscode/**
 .claude/**
 tsconfig.json
+.gitignore
+Makefile
 eslint.config.mjs
 node_modules/**
 **/*.map
