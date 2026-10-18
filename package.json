@@ -1,0 +1,135 @@
+{
+  "name": "herdr-navigator",
+  "displayName": "Herdr Navigator",
+  "description": "Switches the VS Code workspace folder to the working directory of the focused herdr pane.",
+  "version": "0.1.0",
+  "publisher": "z3nder",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.142.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "herdrNavigator.followNow",
+        "title": "Herdr: Follow Focused Pane Now"
+      },
+      {
+        "command": "herdrNavigator.toggleAutoFollow",
+        "title": "Herdr: Toggle Auto-Follow"
+      },
+      {
+        "command": "herdrNavigator.reconnect",
+        "title": "Herdr: Reconnect"
+      },
+      {
+        "command": "herdrNavigator.showDiagnostics",
+        "title": "Herdr Navigator: Show Diagnostics"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "herdrNavigator.followNow",
+        "key": "ctrl+k ctrl+alt+h",
+        "mac": "cmd+k cmd+alt+h"
+      }
+    ],
+    "configuration": {
+      "title": "Herdr Navigator",
+      "properties": {
+        "herdrNavigator.autoFollow": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Automatically follow herdr focus changes."
+        },
+        "herdrNavigator.socketPath": {
+          "type": "string",
+          "default": "",
+          "scope": "window",
+          "description": "herdr socket marker path. Empty uses the HERDR_SOCKET_PATH environment variable, else %APPDATA%\\herdr\\herdr.sock (a named pipe) on Windows, or ~/.config/herdr/herdr.sock on Linux and macOS."
+        },
+        "herdrNavigator.cwdSource": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "pane",
+            "foreground"
+          ],
+          "default": "auto",
+          "scope": "window",
+          "description": "Which pane directory to follow. auto uses the foreground process directory when known, else the pane directory."
+        },
+        "herdrNavigator.followMode": {
+          "type": "string",
+          "enum": [
+            "folder",
+            "workspace"
+          ],
+          "enumDescriptions": [
+            "Open the followed directory as the window's single folder. Reloads the window on every switch, which closes integrated terminals.",
+            "Keep the window and add the followed directory to a multi-root workspace next to an extension-owned empty anchor folder. No reloads."
+          ],
+          "default": "workspace",
+          "scope": "window",
+          "description": "How the window follows the focused herdr pane."
+        },
+        "herdrNavigator.followGitRoot": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Follow the Git repository root that contains the focused pane's directory instead of the exact directory."
+        },
+        "herdrNavigator.debounceMs": {
+          "type": "number",
+          "default": 150,
+          "scope": "window",
+          "description": "Milliseconds to coalesce bursts of herdr focus events."
+        },
+        "herdrNavigator.cwdPollMs": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 0,
+          "scope": "window",
+          "description": "Milliseconds between checks for a directory change (cd) in the focused herdr pane. Values from 1 to 249 are raised to 250; 0 disables the check."
+        },
+        "herdrNavigator.liveCwdProbe": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Resolve the live directory of the focused herdr pane from its shell process: Linux /proc, macOS lsof, Windows Git Bash via its MSYS runtime."
+        },
+        "herdrNavigator.gitBashPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine",
+          "description": "Windows only: path to Git for Windows' usr\\bin\\bash.exe for the live cwd probe. Leave empty to auto-detect."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src",
+    "test": "npm run compile && mocha \"out/test/unit/**/*.test.js\"",
+    "package": "vsce package --allow-missing-repository --skip-license --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^24.19.2",
+    "@types/vscode": "1.140.0",
+    "@vscode/vsce": "^4.0.0",
+    "eslint": "^10.13.0",
+    "mocha": "^11.0.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.2"
+  }
+}

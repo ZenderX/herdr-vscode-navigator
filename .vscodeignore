@@ -1,0 +1,11 @@
+src/**
+out/test/**
+scripts/**
+docs/**
+.vscode/**
+.claude/**
+tsconfig.json
+eslint.config.mjs
+node_modules/**
+**/*.map
+bash.exe.stackdump
