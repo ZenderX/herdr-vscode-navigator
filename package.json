@@ -32,6 +32,12 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": false
+  },
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -71,7 +77,7 @@
         "herdrNavigator.socketPath": {
           "type": "string",
           "default": "",
-          "scope": "window",
+          "scope": "machine",
           "description": "herdr socket marker path. Empty uses the HERDR_SOCKET_PATH environment variable, else %APPDATA%\\herdr\\herdr.sock (a named pipe) on Windows, or ~/.config/herdr/herdr.sock on Linux and macOS."
         },
         "herdrNavigator.cwdSource": {
@@ -140,6 +146,7 @@
     }
   },
   "scripts": {
+    "vscode:prepublish": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\" && npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src",
@@ -152,7 +159,7 @@
     "@types/vscode": "1.140.0",
     "@vscode/vsce": "^4.0.0",
     "eslint": "^10.13.0",
-    "mocha": "^11.0.0",
+    "mocha": "^12.0.3",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.71.2"
   }

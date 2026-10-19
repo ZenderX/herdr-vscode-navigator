@@ -1,5 +1,5 @@
 import { samePath } from "../paths";
-import type { FollowMode } from "../vscode/followMode";
+import type { FollowMode } from "./followMode";
 import type { FolderLike } from "./planFolders";
 
 export type FollowAction =

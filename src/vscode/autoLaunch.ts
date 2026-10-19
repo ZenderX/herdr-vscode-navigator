@@ -3,8 +3,10 @@ import type { HostState } from "../hosting";
 import { findWorkspaceIdByLabel } from "../herdr";
 import type { Logger, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
-import { planAutoLaunch, readRecord, reduce } from "../launch";
-import type { LaunchPlan, SessionEvent, SessionRecord } from "../launch";
+import { planAutoLaunch } from "../launch/planAutoLaunch";
+import type { LaunchPlan } from "../launch/planAutoLaunch";
+import { readRecord, reduce } from "../launch/sessionState";
+import type { SessionEvent, SessionRecord } from "../launch/sessionState";
 
 export const SESSION_KEY = "herdrNavigator.session";
 const TERMINAL_NAME = "herdr";
@@ -47,8 +49,10 @@ export interface AutoLaunchDeps {
   rescan: () => Promise<void>;
   /** Asks for a hosting result without forcing a scan; a fresh cached one is reused. */
   recheck: () => Promise<void>;
-  /** Whether a process with this native pid still exists. */
-  isAlive: (pid: number) => boolean;
+  /** Whether a process with this native pid still exists; defaults to a signal-0 probe. */
+  isAlive?: (pid: number) => boolean;
+  /** The `TerminalExitReason` values that count as VS Code shutting down and the user closing the terminal. */
+  exitReasons: { shutdown: unknown; user: unknown };
   client: () => { snapshot(): Promise<SessionSnapshot>; focusWorkspace(workspaceId: string): Promise<void> };
 }
 
@@ -57,6 +61,16 @@ export type CloseKind = "shutdown" | "user" | "other";
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: unknown) {
+    // EPERM means the process exists but belongs to someone else.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 export class AutoLaunch {
@@ -96,6 +110,12 @@ export class AutoLaunch {
     // A hosting result from before this terminal appeared cannot speak for it.
     this.sweepDone = false;
     this.restartSettle();
+  }
+
+  /** Classifies a terminal's exit reason, then behaves as onTerminalClosed. */
+  onTerminalExited(reason: unknown): void {
+    const { shutdown, user } = this.deps.exitReasons;
+    this.onTerminalClosed(reason === shutdown ? "shutdown" : reason === user ? "user" : "other");
   }
 
   /** Must run before the hosting rescan the same close triggers, so a shutdown loss is classified correctly. */
@@ -154,7 +174,7 @@ export class AutoLaunch {
     if (pids.length === 0 || this.disposed) return;
     this.clientTimer = this.deps.clock.setTimeout(() => {
       if (this.disposed) return;
-      if (pids.some((pid) => this.deps.isAlive(pid))) return this.watchClients(pids);
+      if (pids.some((pid) => (this.deps.isAlive ?? processExists)(pid))) return this.watchClients(pids);
       this.clientTimer = undefined;
       // The first dead-client check forces a scan; later ones only ask the cache, and the watch ends after a bounded number.
       const first = this.deadChecks++ === 0;

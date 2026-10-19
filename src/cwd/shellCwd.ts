@@ -37,16 +37,11 @@ export function parseLsofCwd(stdout: string): string | null {
   return line && line.length > 1 ? line.slice(1) : null;
 }
 
-/** Absolute, normalised path without a trailing separator, or null; Windows forms on win32, POSIX elsewhere. */
-export function normalizeForPlatform(raw: string | null | undefined, platform: NodeJS.Platform): string | null {
-  return normalizeCwd(raw, platform);
-}
-
 /** Returns the absolute, existing directory for a raw probe output, or a failure. */
 async function accept(raw: string | null, deps: ProbeDeps): Promise<ProbeResult> {
   const trimmed = raw?.trim();
   if (!trimmed) return fail("probe returned no directory");
-  const path = normalizeForPlatform(trimmed, deps.platform);
+  const path = normalizeCwd(trimmed, deps.platform);
   if (path === null) return fail(`probe returned a non-absolute path: ${trimmed}`);
   if (!(await deps.isDirectory(path))) return fail(`directory does not exist: ${path}`);
   return { ok: true, path };

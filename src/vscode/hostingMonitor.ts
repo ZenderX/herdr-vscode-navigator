@@ -1,4 +1,7 @@
+import { analyzeHosting, readProcessTable, withTimeout } from "../hosting";
 import type { HostState } from "../hosting";
+import type { Logger } from "../herdr";
+import { errorText } from "../log";
 
 /** Scans per request before coverage is given up on and `unknown` is published. */
 const MAX_SCANS = 3;
@@ -25,11 +28,18 @@ export class HostingMonitor<T> {
   private last: { result: HostingResult<T>; at: number } | undefined;
   private inflight: Promise<HostingResult<T>> | undefined;
   private seq = 0;
+  private disposed = false;
 
   constructor(private readonly deps: HostingMonitorDeps<T>) {}
 
   subscribe(fn: (result: HostingResult<T>) => void): void {
     this.subscribers.push(fn);
+  }
+
+  /** Scans already in flight still finish, but nothing reaches subscribers afterwards. */
+  dispose(): void {
+    this.disposed = true;
+    this.subscribers.length = 0;
   }
 
   /** Cached while fresh (5 s unless hosting, then 30 s); `force` skips the cache but still joins a request in progress. */
@@ -66,7 +76,32 @@ export class HostingMonitor<T> {
 
   private publish(result: HostingResult<T>): HostingResult<T> {
     this.last = { result, at: this.deps.now() };
-    for (const fn of this.subscribers) fn(result);
+    if (!this.disposed) for (const fn of this.subscribers) fn(result);
     return result;
+  }
+}
+
+/** A terminal as far as hosting detection needs it. */
+export interface ScannableTerminal {
+  processId: PromiseLike<number | undefined>;
+}
+
+/** Looks for a herdr client in the process tree of the given terminals; any failure is `unknown`. */
+export async function detectHosting(
+  terminals: readonly ScannableTerminal[],
+  platform: NodeJS.Platform,
+  log: Logger,
+): Promise<{ state: HostState; clientPids: readonly number[] }> {
+  try {
+    // A terminal whose process never launched must not stall detection; it is skipped after 2 s.
+    const shellPids = (
+      await Promise.all(terminals.map((t) => withTimeout(t.processId, 2_000)))
+    ).filter((pid): pid is number => pid !== undefined);
+    if (shellPids.length === 0) return { state: "no", clientPids: [] };
+    const { table, msysEdges } = await readProcessTable(platform);
+    return analyzeHosting(table, shellPids, msysEdges);
+  } catch (err: unknown) {
+    log("warn", `hosting detection failed: ${errorText(err)}`);
+    return { state: "unknown", clientPids: [] };
   }
 }

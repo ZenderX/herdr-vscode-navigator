@@ -3,8 +3,8 @@ import { describe, it } from "mocha";
 import type { TerminalLocation } from "vscode";
 import type { SessionSnapshot } from "../../../herdr";
 import type { HostState } from "../../../hosting";
-import { empty } from "../../../launch";
-import type { SessionRecord } from "../../../launch";
+import { empty } from "../../../launch/sessionState";
+import type { SessionRecord } from "../../../launch/sessionState";
 import { AutoLaunch, SESSION_KEY } from "../../../vscode/autoLaunch";
 import type { AutoLaunchDeps, AutoLaunchTerminal } from "../../../vscode/autoLaunch";
 
@@ -136,6 +136,7 @@ function harness(
       await h.auto.onHosting(rescanState);
     },
     isAlive: (pid) => alive.has(pid),
+    exitReasons: { shutdown: "shutdown-reason", user: "user-reason" },
     client: () => ({ snapshot: () => Promise.resolve(h.snapshot.value), focusWorkspace: (id) => Promise.resolve(void focused.push(id)) }),
   };
   h.auto = new AutoLaunch(deps);
@@ -480,6 +481,21 @@ describe("AutoLaunch hosting loss", () => {
     h.auto.onTerminalClosed("user");
     await h.auto.onHosting("no");
     assert.equal(stored(h).herdrWasRunning, false);
+  });
+
+  it("maps VS Code exit reasons: user clears the flag, shutdown and anything else keep it", async () => {
+    const outcome = async (reason: unknown): Promise<boolean> => {
+      const h = harness(undefined);
+      h.auto.start();
+      await h.auto.onHosting("yes");
+      h.auto.onTerminalExited(reason);
+      await h.auto.onHosting("no");
+      await h.clock.advance(5000);
+      return stored(h).herdrWasRunning;
+    };
+    assert.equal(await outcome("user-reason"), false);
+    assert.equal(await outcome("shutdown-reason"), true);
+    assert.equal(await outcome(undefined), true);
   });
 
   it("treats an unattributed close as unknown and keeps the flag", async () => {

@@ -72,13 +72,22 @@ describe("HerdrClient", () => {
   describe("request", () => {
     it("round-trips ping", async () => {
       server = await startServer((req, socket) => reply(socket, req.id, { type: "pong", version: "0.9.5", protocol: 22 }));
-      const result = await new HerdrClient({ pipeName: server.pipeName }).ping();
+      const result = (await new HerdrClient({ pipeName: server.pipeName }).request("ping", {})) as { protocol: number };
       assert.equal(result.protocol, 22);
+    });
+
+    it("rejects a snapshot whose workspaces or panes are not arrays", async () => {
+      for (const snapshot of [{ panes: [] }, { workspaces: [] }, { panes: {}, workspaces: [] }, { panes: [], workspaces: "x" }]) {
+        server = await startServer((req, socket) => reply(socket, req.id, { type: "session_snapshot", snapshot }));
+        await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).snapshot(), /no snapshot/);
+        await server.close();
+      }
+      server = undefined;
     });
 
     it("reassembles a response split across chunks", async () => {
       server = await startServer((req, socket) => {
-        const line = `${JSON.stringify({ id: req.id, result: { type: "session_snapshot", snapshot: { panes: [] } } })}\n`;
+        const line = `${JSON.stringify({ id: req.id, result: { type: "session_snapshot", snapshot: { panes: [], workspaces: [] } } })}\n`;
         socket.write(line.slice(0, 10));
         setTimeout(() => socket.write(line.slice(10)), 30);
       });
@@ -90,7 +99,7 @@ describe("HerdrClient", () => {
       server = await startServer((req, socket) =>
         socket.write(`${JSON.stringify({ id: req.id, error: { code: "bad", message: "nope" } })}\n`),
       );
-      await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).ping(), /bad: nope/);
+      await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).request("ping", {}), /bad: nope/);
     });
 
     it("rejects on timeout", async () => {
@@ -100,7 +109,7 @@ describe("HerdrClient", () => {
 
     it("rejects when the socket closes without a response", async () => {
       server = await startServer((_req, socket) => socket.destroy());
-      await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).ping(), /closed/);
+      await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).request("ping", {}), /closed/);
     });
 
     it("accepts pane.process_info and returns the shell pid", async () => {
@@ -215,6 +224,38 @@ describe("HerdrClient", () => {
       assert.match(reasons[0], /events_lost/);
     });
 
+    it("reconnects when subscription_started never arrives", async () => {
+      let connections = 0;
+      server = await startServer((req, socket) => {
+        connections += 1;
+        if (connections === 2) reply(socket, req.id, { type: "subscription_started" });
+      });
+      const reasons: string[] = [];
+      let started = 0;
+      sub = new HerdrClient({ pipeName: server.pipeName, backoff, startTimeoutMs: 50 }).subscribe(["pane.focused"], {
+        onStarted: () => (started += 1),
+        onEvent: () => undefined,
+        onDisconnected: (r) => reasons.push(r),
+      });
+      await waitFor(() => started === 1);
+      assert.equal(reasons.length, 1);
+      assert.match(reasons[0], /no subscription_started/);
+    });
+
+    it("does not time out once the subscription started", async () => {
+      server = await startServer((req, socket) => reply(socket, req.id, { type: "subscription_started" }));
+      const reasons: string[] = [];
+      let started = 0;
+      sub = new HerdrClient({ pipeName: server.pipeName, backoff, startTimeoutMs: 30 }).subscribe(["pane.focused"], {
+        onStarted: () => (started += 1),
+        onEvent: () => undefined,
+        onDisconnected: (r) => reasons.push(r),
+      });
+      await waitFor(() => started === 1);
+      await new Promise((r) => setTimeout(r, 120));
+      assert.deepEqual(reasons, []);
+    });
+
     it("stops reconnecting after dispose", async () => {
       server = await startServer((req, socket) => reply(socket, req.id, { type: "subscription_started" }));
       let started = 0;
@@ -227,6 +268,26 @@ describe("HerdrClient", () => {
       await new Promise((r) => setTimeout(r, 150));
       assert.equal(server.connections.length, 1);
     });
+  });
+});
+
+describe("LineSplitter", () => {
+  it("joins partial chunks and drops blank lines and CRs", () => {
+    const splitter = new LineSplitter();
+    assert.deepEqual(splitter.push("ab"), []);
+    assert.deepEqual(splitter.push("c\r\n\nd"), ["abc"]);
+    assert.deepEqual(splitter.push("\n"), ["d"]);
+  });
+
+  it("throws when a pending partial line exceeds the cap, before more is buffered", () => {
+    const splitter = new LineSplitter();
+    const half = "x".repeat(3 * 1024 * 1024);
+    assert.deepEqual(splitter.push(half), []);
+    assert.throws(() => splitter.push(half), /exceeds/);
+  });
+
+  it("throws on an oversize complete line", () => {
+    assert.throws(() => new LineSplitter().push(`${"x".repeat(4 * 1024 * 1024 + 1)}\n`), /exceeds/);
   });
 });
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { PaneInfo, SessionSnapshot } from "../../../herdr";
-import { resolveCwd } from "../../../cwd";
+import { resolveCwd } from "../../../cwd/liveCwd";
 import type { CwdSource } from "../../../follow/resolveTarget";
 import { resolveTarget as resolveTargetOn } from "../../../follow/resolveTarget";
 

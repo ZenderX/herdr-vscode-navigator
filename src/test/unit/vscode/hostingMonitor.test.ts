@@ -75,6 +75,16 @@ describe("HostingMonitor", () => {
     assert.deepEqual(m.published[1]?.clientPids, [9]);
   });
 
+  it("stops publishing to subscribers once disposed", async () => {
+    const m = setup(["a"]);
+    const request = m.monitor.request(true);
+    m.monitor.dispose();
+    m.scans[0]?.resolve("yes", [3]);
+    const result = await request;
+    assert.equal(result.state, "yes");
+    assert.deepEqual(m.published, []);
+  });
+
   it("serves the cache within its lifetime unless forced or a terminal is new", async () => {
     const m = setup(["a"]);
     const first = m.monitor.request();

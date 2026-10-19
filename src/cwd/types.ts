@@ -1,4 +1,4 @@
-export type CwdSource = "probe" | "foreground_cwd" | "cwd";
+export type CwdOrigin = "probe" | "foreground_cwd" | "cwd";
 
 export type ProbeResult = { ok: true; path: string } | { ok: false; reason: string };
 
@@ -21,13 +21,13 @@ export interface ProbeDeps {
 }
 
 export interface FailedAttempt {
-  source: CwdSource;
+  source: CwdOrigin;
   reason: string;
 }
 
 export interface ResolvedCwd {
   path: string | null;
-  source: CwdSource | null;
+  source: CwdOrigin | null;
   /** Sources tried before the winning one (or all of them when none won), in order, with why each failed. */
   attempts: FailedAttempt[];
 }

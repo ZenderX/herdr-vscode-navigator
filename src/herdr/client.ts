@@ -6,7 +6,6 @@ import type {
   HerdrEvent,
   Logger,
   PaneProcessInfo,
-  PingResult,
   RequestOptions,
   SessionSnapshot,
   Subscription,
@@ -25,6 +24,7 @@ const ALLOWED_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const DEFAULT_START_TIMEOUT_MS = 5000;
 const DEFAULT_BACKOFF: BackoffOptions = { minMs: 500, maxMs: 10_000 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -70,11 +70,13 @@ export class HerdrClient {
   private readonly pipeName: string;
   private readonly log: Logger;
   private readonly backoff: BackoffOptions;
+  private readonly startTimeoutMs: number;
 
-  constructor({ pipeName, log, backoff }: HerdrClientOptions) {
+  constructor({ pipeName, log, backoff, startTimeoutMs }: HerdrClientOptions) {
     this.pipeName = pipeName;
     this.log = log ?? (() => undefined);
     this.backoff = backoff ?? DEFAULT_BACKOFF;
+    this.startTimeoutMs = startTimeoutMs ?? DEFAULT_START_TIMEOUT_MS;
   }
 
   request(method: string, params: Record<string, unknown> = {}, options: RequestOptions = {}): Promise<unknown> {
@@ -124,13 +126,9 @@ export class HerdrClient {
     });
   }
 
-  async ping(options?: RequestOptions): Promise<PingResult> {
-    return (await this.request("ping", {}, options)) as PingResult;
-  }
-
   async snapshot(options?: RequestOptions): Promise<SessionSnapshot> {
     const result = await this.request("session.snapshot", {}, options);
-    if (!isRecord(result) || !isRecord(result.snapshot)) {
+    if (!isRecord(result) || !isRecord(result.snapshot) || !Array.isArray(result.snapshot.workspaces) || !Array.isArray(result.snapshot.panes)) {
       throw new Error("herdr session.snapshot returned no snapshot");
     }
     return result.snapshot as SessionSnapshot;
@@ -174,6 +172,7 @@ export class HerdrClient {
       const end = (reason: string): void => {
         if (ended) return;
         ended = true;
+        clearTimeout(startTimer);
         sock.destroy();
         if (disposed) return;
         this.log("warn", `herdr subscription lost: ${reason}`);
@@ -189,14 +188,17 @@ export class HerdrClient {
           return;
         }
         if (isRecord(message.result) && message.result.type === "subscription_started") {
+          clearTimeout(startTimer);
           attempt = 0;
           handlers.onStarted?.();
           return;
         }
         const event = toEvent(message);
         if (event) handlers.onEvent(event);
-        else this.log("debug", `herdr ignored line: ${line.slice(0, 200)}`);
+        else this.log("debug", "herdr ignored non-event line");
       };
+
+      const startTimer = setTimeout(() => end(`no subscription_started within ${this.startTimeoutMs}ms`), this.startTimeoutMs);
 
       sock.on("connect", () => {
         sock.write(encodeRequest(id, "events.subscribe", { subscriptions: types.map((type) => ({ type })) }));

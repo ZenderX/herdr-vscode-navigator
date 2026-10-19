@@ -1,8 +1,8 @@
-import { resolveCwd } from "../cwd";
-import type { ProbeResult, ResolvedCwd } from "../cwd";
-import type { Logger, SessionSnapshot } from "../herdr";
+import { resolveCwd } from "../cwd/liveCwd";
+import type { ProbeResult, ResolvedCwd } from "../cwd/types";
+import type { Logger, PaneInfo, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
-import type { FollowMode } from "../vscode/followMode";
+import type { FollowMode } from "./followMode";
 import { findGitRoot } from "./gitRoot";
 import { planFollowAction } from "./planFollow";
 import { planFolders } from "./planFolders";
@@ -15,7 +15,7 @@ export interface Clock {
   clearTimeout(handle: unknown): void;
 }
 
-export const FOCUS_EVENTS: ReadonlySet<string> = new Set(["workspace_focused", "tab_focused", "pane_focused"]);
+const FOCUS_EVENTS: ReadonlySet<string> = new Set(["workspace_focused", "tab_focused", "pane_focused"]);
 
 /** Live-cwd chain for auto mode: probe the focused pane's shell, then fall back to herdr's own fields. */
 export interface LiveCwdOptions {
@@ -33,8 +33,8 @@ export interface FollowControllerOptions {
   fetchSnapshot: () => Promise<SessionSnapshot>;
   /** Called with each snapshot a follow cycle fetched, before it is resolved. */
   onSnapshot?: (snapshot: SessionSnapshot) => void;
-  /** Resolves true when the plan was applied; false when it was rejected. */
-  applyPlan: (plan: FolderPlan) => Promise<boolean>;
+  /** Resolves true when the plan was applied; false when it was rejected. isCurrent turns false if a newer focus superseded the plan while it waited. */
+  applyPlan: (plan: FolderPlan, isCurrent: () => boolean) => Promise<boolean>;
   /** Called before a convert plan, which restarts the extension host. */
   persistPendingTarget: (target: string) => Promise<void>;
   /** Defaults to workspace mode. */
@@ -54,7 +54,6 @@ export interface FollowControllerOptions {
   autoFollow: boolean;
   debounceMs: number;
   cwdSource: CwdSource;
-  triggerEvents?: ReadonlySet<string>;
   clock?: Clock;
   log?: Logger;
 }
@@ -104,8 +103,8 @@ export class FollowController {
   private rerun = false;
   private rerunForced = false;
   private cycleForced = false;
+  private disposed = false;
   private readonly clock: Clock;
-  private readonly triggerEvents: ReadonlySet<string>;
 
   constructor(private readonly options: FollowControllerOptions) {
     this.autoFollow = options.autoFollow;
@@ -116,7 +115,12 @@ export class FollowController {
     this.gitRootEnabled = options.followGitRoot ?? false;
     this.suppressFirstSwitch = options.suppressFirstSwitch ?? false;
     this.clock = options.clock ?? realClock;
-    this.triggerEvents = options.triggerEvents ?? FOCUS_EVENTS;
+  }
+
+  /** Clears the debounce timer; no plan or folder switch is applied afterwards. */
+  dispose(): void {
+    this.disposed = true;
+    this.cancelTimer();
   }
 
   setAutoFollow(value: boolean): void {
@@ -149,13 +153,13 @@ export class FollowController {
     this.trackedPath = path;
   }
 
-  /** Filters a pushed herdr event name by the trigger set, then behaves like onFocusEvent. */
+  /** Filters a pushed herdr event name by the focus events, then behaves like onFocusEvent. */
   onHerdrEvent(eventName: string): void {
-    if (this.triggerEvents.has(eventName)) this.onFocusEvent();
+    if (FOCUS_EVENTS.has(eventName)) this.onFocusEvent();
   }
 
   onFocusEvent(): void {
-    if (!this.autoFollow) return;
+    if (!this.autoFollow || this.disposed) return;
     this.cancelTimer();
     this.timer = this.clock.setTimeout(() => {
       this.timer = null;
@@ -192,6 +196,7 @@ export class FollowController {
 
   // One loop at a time; a request arriving mid-apply reruns with a fresh snapshot so the latest target wins.
   private run(forced: boolean): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     if (this.loop) {
       this.rerun = true;
       this.rerunForced = this.rerunForced || forced;
@@ -225,39 +230,8 @@ export class FollowController {
         `pane: id=${snapshot.focused_pane_id ?? "none"} tab=${snapshot.focused_tab_id ?? "none"} workspace=${snapshot.focused_workspace_id ?? "none"} cwd=${String(pane?.cwd)} foreground_cwd=${pane?.foreground_cwd ?? "absent"} terminal_title=${String(pane?.terminal_title ?? "absent")}`,
       );
 
-      const { live } = this.options;
-      let resolvedLive: ResolvedCwd | undefined;
-      let probeMs: number | undefined;
-      // Only the pane that will be followed is probed, once per settled focus.
-      if (pane && live && this.cwdSource === "auto") {
-        const enabled = this.liveEnabled;
-        const started = Date.now();
-        const probed = enabled ? await live.probe(pane.pane_id) : undefined;
-        if (enabled) probeMs = Date.now() - started;
-        // A newer focus arrived during the probe: this result is stale, the rerun resolves the latest pane.
-        if (this.rerun) {
-          log?.("info", "target: skipped, focus changed during probe");
-          return;
-        }
-        resolvedLive = resolveCwd(pane, probed, { enabled }, live.platform);
-      }
-
-      const resolved = resolveTarget(snapshot, this.cwdSource, resolvedLive, this.options.platform);
-      const { reason, source, attempts } = resolved;
-      const failed = attempts.map((attempt) => `${attempt.source}: ${attempt.reason}`).join("; ");
-      const detail = `${probeMs === undefined ? "" : ` probe=${probeMs}ms`}${failed ? ` failed=[${failed}]` : ""}`;
-      if (resolved.target === null) {
-        log?.("info", `target: none (${reason})${detail}`);
-        return;
-      }
-      const { hasGitEntry } = this.options;
-      const target =
-        this.gitRootEnabled && hasGitEntry
-          ? await findGitRoot(resolved.target, { hasGitEntry, platform: this.options.platform })
-          : resolved.target;
-      const snapped = target === resolved.target ? "" : ` (git root of ${resolved.target})`;
-      log?.("info", `target: ${target} via ${source} (${reason})${snapped}${detail}`);
-      if (resolvedLive && source === "cwd") log?.("warn", HINT);
+      const target = await this.resolveTargetPath(snapshot, pane);
+      if (target === null) return;
       this.lastTarget = target;
 
       const action = planFollowAction({
@@ -276,44 +250,107 @@ export class FollowController {
       );
       if (action.kind === "noop") return;
       if (action.kind === "openFolder") {
-        if (suppressed && !this.cycleForced) return;
-        // A newer focus (pending timer or rerun), a mode change or auto-follow turned off makes the decision stale.
-        const isCurrent = (): boolean =>
-          this.mode === "folder" && (this.cycleForced || this.autoFollow) && !this.rerun && this.timer === null;
-        const switched = await this.options.switchFolder(target, isCurrent);
-        log?.("info", `mutation: openFolder applied=${switched}`);
-        if (!switched) {
-          log?.("warn", "openFolder skipped");
-          return;
-        }
-        this.lastError = null;
+        await this.applyFolderMode(target, suppressed);
         return;
       }
-
-      const plan = planFolders({
-        folders: this.options.getFolders(),
-        trackedPath: this.trackedPath,
-        anchorPath: this.options.getAnchorPath(),
-        target,
-        isMultiRoot: this.options.isMultiRoot(),
-        adoptedAnchor: this.options.isAdoptedAnchor?.() ?? false,
-        platform: this.options.platform,
-      });
-      log?.("info", `plan: ${describePlan(plan)}`);
-      if (plan.kind === "noop") return;
-
-      if (plan.kind === "convert") await this.options.persistPendingTarget(target);
-      const applied = await this.options.applyPlan(plan);
-      log?.("info", `mutation: ${plan.kind} applied=${applied}`);
-      if (!applied) {
-        log?.("warn", `plan rejected: ${plan.kind}`);
-        return;
-      }
-      this.trackedPath = plan.kind === "remove" ? null : target;
-      this.lastError = null;
+      await this.applyWorkspacePlan(target);
     } catch (err: unknown) {
       this.lastError = err instanceof Error ? err.message : String(err);
       log?.("error", `follow failed: ${errorText(err)}`);
     }
+  }
+
+  /** The directory to follow, or null when there is none or the focus changed while probing. */
+  private async resolveTargetPath(snapshot: SessionSnapshot, pane: PaneInfo | undefined): Promise<string | null> {
+    const { log, live } = this.options;
+    let resolvedLive: ResolvedCwd | undefined;
+    let probeMs: number | undefined;
+    // Only the pane that will be followed is probed, once per settled focus.
+    if (pane && live && this.cwdSource === "auto") {
+      const enabled = this.liveEnabled;
+      const started = Date.now();
+      const probed = enabled ? await live.probe(pane.pane_id) : undefined;
+      if (enabled) probeMs = Date.now() - started;
+      // A newer focus arrived during the probe: this result is stale, the rerun resolves the latest pane.
+      if (this.rerun) {
+        log?.("info", "target: skipped, focus changed during probe");
+        return null;
+      }
+      resolvedLive = resolveCwd(pane, probed, { enabled }, live.platform);
+    }
+
+    const resolved = resolveTarget(snapshot, this.cwdSource, resolvedLive, this.options.platform);
+    const { reason, source, attempts } = resolved;
+    const failed = attempts.map((attempt) => `${attempt.source}: ${attempt.reason}`).join("; ");
+    const detail = `${probeMs === undefined ? "" : ` probe=${probeMs}ms`}${failed ? ` failed=[${failed}]` : ""}`;
+    if (resolved.target === null) {
+      log?.("info", `target: none (${reason})${detail}`);
+      return null;
+    }
+    const { hasGitEntry } = this.options;
+    const target =
+      this.gitRootEnabled && hasGitEntry
+        ? await findGitRoot(resolved.target, { hasGitEntry, platform: this.options.platform })
+        : resolved.target;
+    const snapped = target === resolved.target ? "" : ` (git root of ${resolved.target})`;
+    log?.("info", `target: ${target} via ${source} (${reason})${snapped}${detail}`);
+    if (resolvedLive && source === "cwd") log?.("warn", HINT);
+    return target;
+  }
+
+  // A newer focus (pending timer or rerun), a mode change, auto-follow turned off or dispose makes a decision stale.
+  private isCurrent(mode: FollowMode): boolean {
+    return !this.disposed && this.mode === mode && (this.cycleForced || this.autoFollow) && !this.rerun && this.timer === null;
+  }
+
+  private async applyFolderMode(target: string, suppressed: boolean): Promise<void> {
+    const { log } = this.options;
+    if (suppressed && !this.cycleForced) return;
+    if (!this.isCurrent("folder")) {
+      log?.("info", "plan: skipped, superseded (openFolder)");
+      return;
+    }
+    const switched = await this.options.switchFolder(target, () => this.isCurrent("folder"));
+    log?.("info", `mutation: openFolder applied=${switched}`);
+    if (!switched) {
+      log?.("warn", "openFolder skipped");
+      return;
+    }
+    this.lastError = null;
+  }
+
+  private async applyWorkspacePlan(target: string): Promise<void> {
+    const { log } = this.options;
+    const plan = planFolders({
+      folders: this.options.getFolders(),
+      trackedPath: this.trackedPath,
+      anchorPath: this.options.getAnchorPath(),
+      target,
+      isMultiRoot: this.options.isMultiRoot(),
+      adoptedAnchor: this.options.isAdoptedAnchor?.() ?? false,
+      platform: this.options.platform,
+    });
+    log?.("info", `plan: ${describePlan(plan)}`);
+    if (plan.kind === "noop") return;
+    if (!this.isCurrent("workspace")) {
+      log?.("info", `plan: skipped, superseded (${plan.kind})`);
+      return;
+    }
+
+    if (plan.kind === "convert") {
+      await this.options.persistPendingTarget(target);
+      if (!this.isCurrent("workspace")) {
+        log?.("info", `plan: skipped, superseded (${plan.kind})`);
+        return;
+      }
+    }
+    const applied = await this.options.applyPlan(plan, () => this.isCurrent("workspace"));
+    log?.("info", `mutation: ${plan.kind} applied=${applied}`);
+    if (!applied) {
+      log?.("warn", `plan rejected: ${plan.kind}`);
+      return;
+    }
+    this.trackedPath = plan.kind === "remove" ? null : target;
+    this.lastError = null;
   }
 }

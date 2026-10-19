@@ -21,17 +21,10 @@ export interface SessionSnapshot {
   [key: string]: unknown;
 }
 
-export interface PingResult {
-  type: string;
-  version: string;
-  protocol: number;
-  [key: string]: unknown;
-}
-
 // `herdr api schema --json` (herdr 0.9.5, protocol 22): request { method: "workspace.focus", params: WorkspaceTarget },
 // WorkspaceTarget = { properties: { workspace_id: { type: "string" } }, required: ["workspace_id"], type: "object" }.
 // The success result is not parsed; focusWorkspace only awaits it.
-export interface ForegroundProcess {
+interface ForegroundProcess {
   pid: number;
   name: string;
   argv0?: string;
@@ -74,6 +67,8 @@ export interface HerdrClientOptions {
   pipeName: string;
   log?: Logger;
   backoff?: BackoffOptions;
+  /** How long a subscription attempt may wait for `subscription_started` before it reconnects. Default 5000. */
+  startTimeoutMs?: number;
 }
 
 export interface SubscriptionHandlers {

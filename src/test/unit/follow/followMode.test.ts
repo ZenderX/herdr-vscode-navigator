@@ -1,8 +1,8 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
 import { describe, it } from "mocha";
-import { DEFAULT_FOLLOW_MODE, parseFollowMode } from "../../vscode/followMode";
-import { anchorDirPath, isLegacyAnchor, selectAnchor } from "../../vscode/anchorPath";
+import { DEFAULT_FOLLOW_MODE, parseFollowMode } from "../../../follow/followMode";
+import { anchorDirPath, isLegacyAnchor, selectAnchor } from "../../../vscode/anchorPath";
 
 describe("parseFollowMode", () => {
   it("accepts folder", () => assert.equal(parseFollowMode("folder"), "folder"));

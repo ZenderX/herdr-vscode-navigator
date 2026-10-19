@@ -1,5 +1,6 @@
-import { createShellCwdProbe, normalizeForPlatform } from "./shellCwd";
-import type { CwdSource, FailedAttempt, ProbeDeps, ProbeResult, ProbeSettings, ResolvedCwd } from "./types";
+import { normalizeCwd } from "../paths";
+import { createShellCwdProbe } from "./shellCwd";
+import type { CwdOrigin, FailedAttempt, ProbeDeps, ProbeResult, ProbeSettings, ResolvedCwd } from "./types";
 
 export interface PaneCwdFields {
   cwd?: string | null;
@@ -22,7 +23,7 @@ export function resolveCwd(
   platform: NodeJS.Platform,
 ): ResolvedCwd {
   const attempts: FailedAttempt[] = [];
-  const win = (source: CwdSource, path: string): ResolvedCwd => ({ path, source, attempts });
+  const win = (source: CwdOrigin, path: string): ResolvedCwd => ({ path, source, attempts });
 
   if (!settings.enabled) attempts.push({ source: "probe", reason: "disabled" });
   else if (!probe) attempts.push({ source: "probe", reason: "not run" });
@@ -34,7 +35,7 @@ export function resolveCwd(
     ["cwd", pane.cwd],
   ];
   for (const [source, raw] of fields) {
-    const path = normalizeForPlatform(raw, platform);
+    const path = normalizeCwd(raw, platform);
     if (path !== null) return win(source, path);
     attempts.push({ source, reason: raw ? `not an absolute path: ${raw}` : "absent" });
   }

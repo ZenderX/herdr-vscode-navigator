@@ -103,7 +103,7 @@ A status bar item on the left shows `herdr: <folder>` or `herdr: disconnected`; 
 | Setting | Default | Description |
 |---|---|---|
 | `herdrNavigator.autoFollow` | `true` | Follow herdr focus changes and `cd` in the focused pane automatically |
-| `herdrNavigator.socketPath` | `""` | herdr socket marker path. Empty uses `HERDR_SOCKET_PATH`, else `%APPDATA%\herdr\herdr.sock` |
+| `herdrNavigator.socketPath` | `""` | herdr socket marker path. Empty uses `HERDR_SOCKET_PATH`, else `%APPDATA%\herdr\herdr.sock`. Honored only in user (local or remote) settings; workspace and folder values are ignored |
 | `herdrNavigator.cwdSource` | `auto` | `auto` (foreground process cwd if known, else pane cwd), `pane`, or `foreground` |
 | `herdrNavigator.followMode` | `workspace` | `workspace` (untitled multi-root, no reloads) or `folder` (single folder, reloads the window and closes the terminal on every switch) |
 | `herdrNavigator.followGitRoot` | `true` | Follow the Git repository root containing the focused pane's directory instead of the exact directory |
@@ -136,7 +136,7 @@ If the directory is stale, open "Herdr Navigator: Show Diagnostics" and read the
 
 ## Troubleshooting
 
-- Open the "Herdr Navigator" output channel (View > Output) for connection and switch logs.
+- Open the "Herdr Navigator" output channel (View > Output) for connection and switch logs. It contains local folder paths, so review it before pasting it publicly.
 - Run `node scripts/herdr-probe.mjs --listen 5` to check the pipe and see raw herdr replies.
 - If herdr uses a non-default socket, set `HERDR_SOCKET_PATH` before launching VS Code, or set `herdrNavigator.socketPath`.
 - Run "Herdr: Reconnect" after restarting herdr.

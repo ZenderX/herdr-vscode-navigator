@@ -1,8 +1,6 @@
 import assert from "node:assert/strict";
 import {
   analyzeHosting,
-  classifyHosting,
-  createCachedScan,
   mayFollowAutomatically,
   parseMsysTable,
   parseProcessTable,
@@ -28,73 +26,27 @@ describe("mayFollowAutomatically", () => {
   });
 });
 
-describe("createCachedScan", () => {
-  const ttl = (hosting: boolean): number => (hosting ? 30_000 : 5_000);
-
-  it("reuses the cached result within the lifetime and rescans after it", async () => {
-    let clock = 0;
-    let scans = 0;
-    const cache = createCachedScan(async () => (scans++, false), ttl, () => clock);
-    await cache.get();
-    clock = 4_999;
-    await cache.get();
-    assert.equal(scans, 1);
-    clock = 5_000;
-    await cache.get();
-    assert.equal(scans, 2);
-  });
-
-  it("keeps a hosting result for 30 s", async () => {
-    let clock = 0;
-    let scans = 0;
-    const cache = createCachedScan(async () => (scans++, true), ttl, () => clock);
-    await cache.get();
-    clock = 29_999;
-    await cache.get();
-    assert.equal(scans, 1);
-    clock = 30_000;
-    await cache.get();
-    assert.equal(scans, 2);
-  });
-
-  it("shares one scan between concurrent requests, even forced ones", async () => {
-    let scans = 0;
-    const cache = createCachedScan(async () => (scans++, true), ttl, () => 0);
-    const results = await Promise.all([cache.get(), cache.get(true), cache.get()]);
-    assert.deepEqual(results, [true, true, true]);
-    assert.equal(scans, 1);
-  });
-
-  it("force bypasses a fresh cache", async () => {
-    let scans = 0;
-    const cache = createCachedScan(async () => (scans++, false), ttl, () => 0);
-    await cache.get();
-    await cache.get(true);
-    assert.equal(scans, 2);
-  });
-});
-
 const proc = (pid: number, ppid: number, name: string) => ({ pid, ppid, name });
 
-describe("classifyHosting", () => {
+describe("analyzeHosting", () => {
   it("is yes when herdr.exe descends from a terminal shell", () => {
     const table = [proc(1, 0, "Code.exe"), proc(10, 1, "bash.exe"), proc(11, 10, "wt.exe"), proc(12, 11, "HERDR.EXE")];
-    assert.equal(classifyHosting(table, [10]), "yes");
+    assert.equal(analyzeHosting(table, [10]).state, "yes");
   });
 
   it("is no for a herdr.exe that lives under another window's shell", () => {
     const table = [proc(1, 0, "Code.exe"), proc(10, 1, "bash.exe"), proc(20, 1, "bash.exe"), proc(21, 20, "herdr.exe")];
-    assert.equal(classifyHosting(table, [10]), "no");
+    assert.equal(analyzeHosting(table, [10]).state, "no");
   });
 
   it("is no when no terminal has a process id or no herdr runs", () => {
-    assert.equal(classifyHosting([proc(12, 10, "herdr.exe")], []), "no");
-    assert.equal(classifyHosting([proc(10, 1, "bash.exe")], [10]), "no");
+    assert.equal(analyzeHosting([proc(12, 10, "herdr.exe")], []).state, "no");
+    assert.equal(analyzeHosting([proc(10, 1, "bash.exe")], [10]).state, "no");
   });
 
   it("terminates on parent loops", () => {
     const table = [proc(5, 6, "herdr.exe"), proc(6, 5, "x.exe")];
-    assert.equal(classifyHosting(table, [99]), "no");
+    assert.equal(analyzeHosting(table, [99]).state, "no");
   });
 
   // Git Bash forks a child that execs env.exe and exits, leaving herdr's Windows parent chain dead.
@@ -115,18 +67,18 @@ describe("classifyHosting", () => {
   );
 
   it("follows MSYS parent links past a dead Windows parent", () => {
-    assert.equal(classifyHosting(gitBashTable, [35640], msys), "yes");
+    assert.equal(analyzeHosting(gitBashTable, [35640], msys).state, "yes");
     // The native herdr.exe pid, not the server's, is what the exit watcher probes.
     assert.deepEqual(analyzeHosting(gitBashTable, [35640], msys), { state: "yes", clientPids: [23016] });
   });
 
   it("still rejects another window's shell when the MSYS link is known", () => {
     const table = [...gitBashTable, proc(900, 2500, "bash.exe")];
-    assert.equal(classifyHosting(table, [900], msys), "no");
+    assert.equal(analyzeHosting(table, [900], msys).state, "no");
   });
 
   it("is unknown, not no, when an MSYS-launched herdr chain dies at a missing pid", () => {
-    assert.equal(classifyHosting(gitBashTable, [35640]), "unknown");
+    assert.equal(analyzeHosting(gitBashTable, [35640]).state, "unknown");
   });
 });
 
@@ -152,24 +104,6 @@ describe("withTimeout", () => {
   });
 });
 
-describe("createCachedScan failure", () => {
-  it("clears the in-flight scan when it rejects so the next get starts a new one", async () => {
-    let scans = 0;
-    const cache = createCachedScan(
-      async () => {
-        scans++;
-        if (scans === 1) throw new Error("boom");
-        return "yes";
-      },
-      () => 5_000,
-      () => 0,
-    );
-    await assert.rejects(cache.get(), /boom/);
-    assert.equal(await cache.get(), "yes");
-    assert.equal(scans, 2);
-  });
-});
-
 describe("parsePsTable and Linux-shaped hosting", () => {
   const text = [
     "    1     0 /sbin/init",
@@ -189,12 +123,12 @@ describe("parsePsTable and Linux-shaped hosting", () => {
   });
 
   it("is yes when a herdr client descends from a terminal shell, even under a directory named server", () => {
-    assert.equal(classifyHosting(table, [3000]), "yes");
+    assert.equal(analyzeHosting(table, [3000]).state, "yes");
   });
 
   it("ignores the herdr server and is no for a shell without a client below it", () => {
-    assert.equal(classifyHosting(table.filter(({ pid }) => pid !== 4200), [4000]), "no");
-    assert.equal(classifyHosting(table, [4000]), "yes");
+    assert.equal(analyzeHosting(table.filter(({ pid }) => pid !== 4200), [4000]).state, "no");
+    assert.equal(analyzeHosting(table, [4000]).state, "yes");
   });
 });
 

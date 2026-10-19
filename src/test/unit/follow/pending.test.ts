@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { PENDING_STALE_MS, reconcilePending as reconcilePendingOn } from "../../../follow/pending";
+import { PENDING_STALE_MS, reconcilePending as reconcilePendingOn, resumePending } from "../../../follow/pending";
+import type { ResumeDeps } from "../../../follow/pending";
 
 // Tests default to win32 explicitly so they run identically on any host.
 const reconcilePending = (
@@ -45,5 +46,62 @@ describe("reconcilePending", () => {
   it("clears a malformed intent and ignores a missing one", () => {
     assert.deepEqual(reconcilePending({ target: 1 }, [], NOW).clear, true);
     assert.deepEqual(reconcilePending(undefined, [], NOW), { action: "none", clear: false, message: "no pending intent" });
+  });
+});
+
+function resume(overrides: Partial<ResumeDeps>) {
+  const calls: string[] = [];
+  const deps: ResumeDeps = {
+    pending: undefined,
+    saved: undefined,
+    folders: folders("C:\\anchor"),
+    now: NOW,
+    platform: "win32",
+    setTrackedPath: (path) => calls.push(`track:${path}`),
+    saveTracked: async (path) => void calls.push(`save:${path}`),
+    adoptConfirmation: async () => void calls.push("adopt"),
+    clearPending: async () => void calls.push("clear"),
+    log: () => undefined,
+    ...overrides,
+  };
+  return { calls, run: () => resumePending(deps) };
+}
+
+describe("resumePending", () => {
+  it("tracks, saves and clears an open pending target, adopting the confirmation only when confirmed", async () => {
+    const open = folders("C:\\anchor", "C:\\w");
+    const confirmed = resume({ pending: { target: "C:\\w", at: NOW, confirmed: true }, folders: open });
+    await confirmed.run();
+    assert.deepEqual(confirmed.calls, ["track:C:\\w", "save:C:\\w", "clear", "adopt"]);
+
+    const unconfirmed = resume({ pending: { target: "C:\\w", at: NOW }, folders: open });
+    await unconfirmed.run();
+    assert.deepEqual(unconfirmed.calls, ["track:C:\\w", "save:C:\\w", "clear"]);
+  });
+
+  it("uses the saved slot when the pending target is not open", async () => {
+    const { calls, run } = resume({
+      pending: { target: "C:\\gone", at: NOW },
+      saved: "C:\\s",
+      folders: folders("C:\\anchor", "C:\\s"),
+    });
+    await run();
+    assert.deepEqual(calls, ["track:C:\\s", "save:C:\\s"]);
+  });
+
+  it("clears a stale or malformed intent", async () => {
+    const stale = resume({ pending: { target: "C:\\w", at: NOW - PENDING_STALE_MS - 1 } });
+    await stale.run();
+    assert.deepEqual(stale.calls, ["clear"]);
+
+    const malformed = resume({ pending: { target: 1 } });
+    await malformed.run();
+    assert.deepEqual(malformed.calls, ["clear"]);
+  });
+
+  it("keeps a fresh unopened intent", async () => {
+    const { calls, run } = resume({ pending: { target: "C:\\w", at: NOW - 1000, confirmed: true } });
+    await run();
+    assert.deepEqual(calls, []);
   });
 });

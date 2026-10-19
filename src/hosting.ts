@@ -80,19 +80,11 @@ export type HostState = "yes" | "no" | "unknown";
 const MSYS_LAYER = new Set(["env.exe", "bash.exe", "sh.exe", "herdr.exe"]);
 
 /**
- * "yes" when a herdr client descends from a terminal shell over the union of Windows and MSYS parent links.
+ * State "yes" when a herdr client descends from a terminal shell over the union of Windows and MSYS parent links,
+ * with the native pids of those clients.
  * "unknown" when no client reaches a shell and some MSYS-launched client's chain dies at a missing pid,
  * so the link may be hidden; otherwise "no".
  */
-export function classifyHosting(
-  table: readonly ProcessInfo[],
-  shellPids: readonly number[],
-  msysEdges: readonly MsysEdge[] = [],
-): HostState {
-  return analyzeHosting(table, shellPids, msysEdges).state;
-}
-
-/** Like classifyHosting, also returning the native pids of the herdr clients that descend from a shell. */
 export function analyzeHosting(
   table: readonly ProcessInfo[],
   shellPids: readonly number[],
@@ -160,44 +152,19 @@ export function withTimeout<T>(promise: PromiseLike<T>, ms: number): Promise<T |
   });
 }
 
-export interface CachedScan<T> {
-  /** Resolves a cached result while fresh; `force` skips the cache but still joins an in-flight scan. */
-  get(force?: boolean): Promise<T>;
-}
-
-/** Caches an async scan with a per-result lifetime and coalesces concurrent requests into one run. */
-export function createCachedScan<T>(
-  scan: () => Promise<T>,
-  ttlMs: (value: T) => number,
-  now: () => number = Date.now,
-): CachedScan<T> {
-  let cached: { value: T; at: number } | undefined;
-  let inflight: Promise<T> | undefined;
-  return {
-    get(force = false): Promise<T> {
-      if (inflight) return inflight;
-      if (!force && cached && now() - cached.at < ttlMs(cached.value)) return Promise.resolve(cached.value);
-      inflight = scan()
-        .then((value) => {
-          cached = { value, at: now() };
-          return value;
-        })
-        .finally(() => {
-          inflight = undefined;
-        });
-      return inflight;
-    },
-  };
-}
+// Looked up once per session, including "not found"; Git installed later is noticed after a reload.
+let msysPs: { path: string | undefined } | undefined;
 
 /** Finds Git for Windows' ps.exe next to a git.exe on PATH (cmd\ or bin\ layouts) or in Program Files. */
 function findMsysPs(): string | undefined {
+  if (msysPs) return msysPs.path;
   const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
   const candidates = dirs
     .filter((dir) => existsSync(path.join(dir, "git.exe")))
     .flatMap((dir) => [path.join(dir, "..", "usr", "bin", "ps.exe"), path.join(dir, "..", "..", "usr", "bin", "ps.exe")]);
   if (process.env.ProgramFiles) candidates.push(path.join(process.env.ProgramFiles, "Git", "usr", "bin", "ps.exe"));
-  return candidates.find((candidate) => existsSync(candidate));
+  msysPs = { path: candidates.find((candidate) => existsSync(candidate)) };
+  return msysPs.path;
 }
 
 async function readMsysEdges(): Promise<MsysEdge[]> {
@@ -207,7 +174,7 @@ async function readMsysEdges(): Promise<MsysEdge[]> {
     const { stdout } = await execFileAsync(ps, ["-W"], { maxBuffer: 32 * 1024 * 1024, timeout: 15_000, windowsHide: true });
     return parseMsysTable(stdout);
   } catch {
-    // Without MSYS links, classifyHosting degrades to "unknown" for MSYS-launched herdr.
+    // Without MSYS links, analyzeHosting degrades to "unknown" for MSYS-launched herdr.
     return [];
   }
 }

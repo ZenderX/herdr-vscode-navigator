@@ -1,6 +1,6 @@
 import { StringDecoder } from "node:string_decoder";
 
-export const MAX_LINE_BYTES = 4 * 1024 * 1024;
+const MAX_LINE_BYTES = 4 * 1024 * 1024;
 
 let requestCounter = 0;
 
@@ -19,13 +19,22 @@ export class LineSplitter {
   private buffer = "";
 
   push(chunk: Buffer | string): string[] {
-    this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
-    const lines = this.buffer.split("\n");
-    this.buffer = lines.pop() ?? "";
-    if (this.buffer.length > MAX_LINE_BYTES || lines.some((l) => l.length > MAX_LINE_BYTES)) {
+    const text = typeof chunk === "string" ? chunk : this.decoder.write(chunk);
+    const lines: string[] = [];
+    let start = 0;
+    // Only the newly appended text is searched, so a long line costs linear time overall.
+    for (let nl = text.indexOf("\n"); nl !== -1; nl = text.indexOf("\n", start)) {
+      const line = (this.buffer + text.slice(start, nl)).replace(/\r$/, "");
+      this.buffer = "";
+      start = nl + 1;
+      if (line.length > MAX_LINE_BYTES) throw new Error(`herdr line exceeds ${MAX_LINE_BYTES} bytes`);
+      if (line.length > 0) lines.push(line);
+    }
+    if (this.buffer.length + text.length - start > MAX_LINE_BYTES) {
       throw new Error(`herdr line exceeds ${MAX_LINE_BYTES} bytes`);
     }
-    return lines.map((l) => l.replace(/\r$/, "")).filter((l) => l.length > 0);
+    this.buffer += text.slice(start);
+    return lines;
   }
 }
 

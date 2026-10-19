@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { ProbeResult } from "../../../cwd";
+import type { ProbeResult } from "../../../cwd/types";
 import type { PaneInfo, SessionSnapshot } from "../../../herdr";
 import { FollowController } from "../../../follow/controller";
 import type { Clock } from "../../../follow/controller";
@@ -49,9 +49,10 @@ interface Harness {
   fetches: { count: number };
   folders: { value: FolderLike[]; multi: boolean };
   gate: { release: (() => void) | null; hold: boolean };
+  currents: Array<() => boolean>;
 }
 
-function harness(autoFollow = true): Harness {
+function harness(autoFollow = true, onFetch?: () => void): Harness {
   const clock = new FakeClock();
   const cwd = { value: "C:\\one" };
   const plans: FolderPlan[] = [];
@@ -60,13 +61,16 @@ function harness(autoFollow = true): Harness {
   const fetches = { count: 0 };
   const folders = { value: [{ path: "C:\\anchor" }, { path: "C:\\start" }], multi: true };
   const gate: Harness["gate"] = { release: null, hold: false };
+  const currents: Harness["currents"] = [];
   const controller = new FollowController({
     platform: "win32",
     fetchSnapshot: async () => {
       fetches.count += 1;
+      onFetch?.();
       return snap(cwd.value);
     },
-    applyPlan: async (plan) => {
+    applyPlan: async (plan, isCurrent) => {
+      currents.push(isCurrent);
       plans.push(plan);
       order.push("apply");
       if (plan.kind === "replace") {
@@ -89,7 +93,7 @@ function harness(autoFollow = true): Harness {
     clock,
   });
   controller.setTrackedPath("C:\\start");
-  return { controller, clock, cwd, plans, persisted, order, fetches, folders, gate };
+  return { controller, clock, cwd, plans, persisted, order, fetches, folders, gate, currents };
 }
 
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -183,6 +187,130 @@ describe("FollowController", () => {
     h.clock.advance(1000);
     await h.controller.whenIdle();
     assert.equal(h.fetches.count, 0);
+  });
+
+  it("applyPlan's isCurrent turns false once a newer focus arrives while the plan waits", async () => {
+    const h = harness();
+    h.gate.hold = true;
+    h.controller.onFocusEvent();
+    h.clock.advance(100);
+    await tick();
+    const isCurrent = h.currents[0];
+    assert.ok(isCurrent);
+    assert.equal(isCurrent(), true);
+    h.controller.onFocusEvent();
+    assert.equal(isCurrent(), false);
+    h.gate.hold = false;
+    h.gate.release?.();
+    await h.controller.whenIdle();
+  });
+
+  it("does not apply a plan when a newer focus arrived while the snapshot was fetched", async () => {
+    const late: { fire: (() => void) | null } = { fire: null };
+    const h = harness(true, () => {
+      const fire = late.fire;
+      late.fire = null;
+      fire?.();
+    });
+    late.fire = () => h.controller.onFocusEvent();
+    h.controller.onFocusEvent();
+    h.clock.advance(100);
+    await h.controller.whenIdle();
+    assert.equal(h.plans.length, 0, "the superseded plan must be skipped");
+    h.clock.advance(100);
+    await h.controller.whenIdle();
+    assert.equal(h.plans.length, 1);
+  });
+
+  it("dispose clears the debounce timer and later events and followNow do nothing", async () => {
+    const h = harness();
+    h.controller.onFocusEvent();
+    assert.equal(h.clock.pending, 1);
+    h.controller.dispose();
+    assert.equal(h.clock.pending, 0);
+    h.controller.onFocusEvent();
+    assert.equal(h.clock.pending, 0);
+    await h.controller.followNow();
+    assert.equal(h.fetches.count, 0);
+    assert.equal(h.plans.length, 0);
+  });
+
+  it("dispose during an in-flight apply marks the plan stale and applies nothing afterwards", async () => {
+    const h = harness();
+    h.gate.hold = true;
+    h.controller.onFocusEvent();
+    h.clock.advance(100);
+    await tick();
+    const isCurrent = h.currents[0];
+    assert.ok(isCurrent);
+    h.controller.dispose();
+    assert.equal(isCurrent(), false);
+    h.gate.hold = false;
+    h.gate.release?.();
+    await h.controller.whenIdle();
+    assert.equal(h.plans.length, 1);
+  });
+
+  it("dispose while the snapshot is pending leaves switchFolder uncalled in folder mode", async () => {
+    let releaseFetch: (() => void) | null = null;
+    const switched: string[] = [];
+    const controller = new FollowController({
+      platform: "win32",
+      mode: "folder",
+      fetchSnapshot: async () => {
+        await new Promise<void>((resolve) => (releaseFetch = resolve));
+        return snap("C:\\one");
+      },
+      applyPlan: async () => true,
+      persistPendingTarget: async () => undefined,
+      switchFolder: async (target) => {
+        switched.push(target);
+        return true;
+      },
+      getFolders: () => [{ path: "C:\\anchor" }],
+      isMultiRoot: () => false,
+      getAnchorPath: () => "C:\\anchor",
+      autoFollow: true,
+      debounceMs: 100,
+      cwdSource: "auto",
+      clock: new FakeClock(),
+    });
+    const cycle = controller.followNow();
+    await tick();
+    assert.ok(releaseFetch);
+    controller.dispose();
+    (releaseFetch as () => void)();
+    await cycle;
+    assert.deepEqual(switched, []);
+  });
+
+  it("dispose while persisting a convert target leaves applyPlan uncalled", async () => {
+    let releasePersist: (() => void) | null = null;
+    const applied: FolderPlan[] = [];
+    const controller = new FollowController({
+      platform: "win32",
+      fetchSnapshot: async () => snap("C:\\one"),
+      applyPlan: async (plan) => {
+        applied.push(plan);
+        return true;
+      },
+      persistPendingTarget: () => new Promise<void>((resolve) => (releasePersist = resolve)),
+      switchFolder: async () => false,
+      getFolders: () => [{ path: "C:\\anchor" }],
+      isMultiRoot: () => false,
+      getAnchorPath: () => "C:\\anchor",
+      autoFollow: true,
+      debounceMs: 100,
+      cwdSource: "auto",
+      clock: new FakeClock(),
+    });
+    const cycle = controller.followNow();
+    await tick();
+    assert.ok(releasePersist);
+    controller.dispose();
+    (releasePersist as () => void)();
+    await cycle;
+    assert.deepEqual(applied, []);
   });
 
   it("turning autoFollow off cancels a pending debounce", async () => {

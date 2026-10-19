@@ -11,6 +11,10 @@ class FakeClock implements Clock {
   private readonly timers = new Map<number, { at: number; fn: () => void }>();
   private now = 0;
 
+  get time(): number {
+    return this.now;
+  }
+
   setTimeout(fn: () => void, ms: number): unknown {
     const id = this.nextId++;
     this.timers.set(id, { at: this.now + ms, fn });
@@ -77,6 +81,7 @@ function harness(cwdSource: CwdSource = "auto"): Harness {
       state.changes += 1;
     },
     clock,
+    now: () => clock.time,
   });
   return { poller, clock, state };
 }
@@ -162,7 +167,7 @@ describe("CwdPoller", () => {
     assert.equal(h.state.changes, 1);
   });
 
-  it("never overlaps polls: a pollNow during an in-flight poll is ignored", async () => {
+  it("never overlaps polls: a pollNow during an in-flight poll waits for it", async () => {
     const h = harness();
     h.poller.start(1000);
     let release: () => void = () => undefined;
@@ -175,6 +180,113 @@ describe("CwdPoller", () => {
     release();
     await settle();
     assert.equal(h.clock.pending, 1);
+  });
+
+  it("a burst of pollNow during one in-flight poll queues a single trailing poll, delayed to MIN_POLL_MS after the last start", async () => {
+    const h = harness();
+    h.poller.start(5000);
+    let release: () => void = () => undefined;
+    h.state.hold = new Promise<void>((resolve) => (release = resolve));
+    h.poller.pollNow();
+    await settle();
+    assert.equal(h.state.fetches, 1);
+    h.poller.pollNow();
+    h.poller.pollNow();
+    h.poller.pollNow();
+    h.state.hold = null;
+    release();
+    await settle();
+    assert.equal(h.state.fetches, 1);
+    assert.equal(h.clock.pending, 1);
+    await tick(h, MIN_POLL_MS);
+    assert.equal(h.state.fetches, 2);
+    await tick(h, MIN_POLL_MS * 4);
+    assert.equal(h.state.fetches, 2);
+  });
+
+  it("a trailing request while a follow cycle is busy defers by a timer instead of recursing, then polls once idle", async () => {
+    const h = harness();
+    h.poller.start(5000);
+    let release: () => void = () => undefined;
+    h.state.hold = new Promise<void>((resolve) => (release = resolve));
+    h.poller.pollNow();
+    await settle();
+    h.poller.pollNow();
+    h.state.busy = true;
+    h.state.hold = null;
+    release();
+    await settle();
+    await tick(h, MIN_POLL_MS);
+    assert.equal(h.state.fetches, 1);
+    assert.equal(h.clock.pending, 1);
+    h.state.busy = false;
+    await tick(h, MIN_POLL_MS);
+    assert.equal(h.state.fetches, 2);
+    assert.equal(h.clock.pending, 1);
+  });
+
+  it("a trailing request while a restart's tick finds a poll in flight defers by a timer instead of recursing", async () => {
+    const h = harness();
+    h.poller.start(5000);
+    let release: () => void = () => undefined;
+    h.state.hold = new Promise<void>((resolve) => (release = resolve));
+    h.poller.pollNow();
+    await settle();
+    h.poller.start(2000);
+    h.poller.pollNow();
+    await tick(h, 2000);
+    assert.equal(h.state.fetches, 1);
+    assert.equal(h.clock.pending, 1);
+    h.state.hold = null;
+    release();
+    await settle();
+    assert.equal(h.clock.pending, 1);
+    await tick(h, MIN_POLL_MS);
+    assert.equal(h.state.fetches, 2);
+    assert.equal(h.clock.pending, 1);
+  });
+
+  it("a pollNow within MIN_POLL_MS of the last poll is deferred to the remainder", async () => {
+    const h = harness();
+    h.poller.start(5000);
+    h.poller.pollNow();
+    await settle();
+    assert.equal(h.state.fetches, 1);
+    await tick(h, 100);
+    h.poller.pollNow();
+    await settle();
+    assert.equal(h.state.fetches, 1);
+    await tick(h, MIN_POLL_MS - 100 - 1);
+    assert.equal(h.state.fetches, 1);
+    await tick(h, 1);
+    assert.equal(h.state.fetches, 2);
+  });
+
+  it("a poll that was in flight when observe() recorded a newer baseline does not overwrite it", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    await tick(h);
+    // The slow poll reads p2 at /x/old; before it resolves a follow cycle observes /x/new.
+    h.state.focused = "p2";
+    h.state.panes = [pane("p1", false, "/a"), pane("p2", true, "/x/old")];
+    let release: () => void = () => undefined;
+    h.state.hold = new Promise<void>((resolve) => (release = resolve));
+    await tick(h);
+    h.poller.observe({
+      focused_workspace_id: "w",
+      focused_tab_id: "tab",
+      focused_pane_id: "p2",
+      panes: [pane("p1", false, "/a"), pane("p2", true, "/x/new")],
+      tabs: [],
+      workspaces: [],
+    });
+    h.state.hold = null;
+    release();
+    await settle();
+    // Baseline is still /x/new: an unchanged /x/new next tick triggers nothing. A stale overwrite to /x/old would fire a change.
+    h.state.panes = [pane("p1", false, "/a"), pane("p2", true, "/x/new")];
+    await tick(h);
+    assert.equal(h.state.changes, 0);
   });
 
   it("pollNow runs a tick immediately and keeps a single timer", async () => {
@@ -265,6 +377,7 @@ describe("CwdPoller", () => {
     assert.equal(h.state.fetches, 1);
     assert.equal(h.state.changes, 0);
     h.state.panes = [pane("p1", true, "/a/b"), pane("p2", false, "/x")];
+    await tick(h, MIN_POLL_MS);
     routeHerdrEvent("pane_updated", routes);
     await settle();
     assert.equal(h.state.fetches, 2);

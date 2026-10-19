@@ -4,7 +4,7 @@ import { planFollowAction } from "../../../follow/planFollow";
 import { openFolderInWindow, switchFolder } from "../../../follow/switchFolder";
 import type { FolderLike } from "../../../follow/planFolders";
 import type { SessionSnapshot } from "../../../herdr";
-import type { FollowMode } from "../../../vscode/followMode";
+import type { FollowMode } from "../../../follow/followMode";
 
 const single: FolderLike[] = [{ path: "C:\\proj" }];
 const multi: FolderLike[] = [{ path: "C:\\anchor" }, { path: "C:\\proj" }];

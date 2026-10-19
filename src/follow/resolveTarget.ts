@@ -1,5 +1,5 @@
 import type { PaneInfo, SessionSnapshot } from "../herdr";
-import type { CwdSource as LiveSource, FailedAttempt, ResolvedCwd } from "../cwd";
+import type { CwdOrigin, FailedAttempt, ResolvedCwd } from "../cwd/types";
 import { normalizeCwd } from "../paths";
 
 export type CwdSource = "auto" | "pane" | "foreground";
@@ -8,7 +8,7 @@ export interface ResolvedTarget {
   target: string | null;
   reason: string;
   /** Field the target came from; null when there is no target. */
-  source: LiveSource | null;
+  source: CwdOrigin | null;
   /** Sources tried and rejected before the winning one, with why. */
   attempts: FailedAttempt[];
 }
@@ -28,7 +28,7 @@ export function pickCwd(pane: PaneInfo, source: CwdSource): string | null | unde
   return pane.foreground_cwd ?? pane.cwd;
 }
 
-function fieldSource(pane: PaneInfo, source: CwdSource): LiveSource {
+function fieldSource(pane: PaneInfo, source: CwdSource): CwdOrigin {
   if (source === "pane") return "cwd";
   if (source === "foreground") return "foreground_cwd";
   return pane.foreground_cwd != null ? "foreground_cwd" : "cwd";

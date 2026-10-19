@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { CwdSource } from "../follow";
-import { parseFollowMode, type FollowMode } from "./followMode";
+import { parseFollowMode, type FollowMode } from "../follow/followMode";
 
 export interface Settings {
   autoFollow: boolean;
