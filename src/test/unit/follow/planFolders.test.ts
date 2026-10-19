@@ -136,14 +136,14 @@ describe("planFolders", () => {
   });
 
   describe("adopted legacy anchor", () => {
-    const legacy = "c:\\Users\\me\\AppData\\Roaming\\Code\\User\\globalStorage\\old.herdr-navigator\\anchor";
-    const stale = "c:\\Users\\me\\.herdr\\worktrees\\stale-feature";
-    const tracked = "c:\\Users\\me\\Documents\\Projects\\herdr-vscode-navigator";
+    const legacy = "C:\\Users\\me\\AppData\\Roaming\\Code\\User\\globalStorage\\old.herdr-navigator\\anchor";
+    const stale = "C:\\Users\\me\\worktrees\\stale-feature";
+    const tracked = "C:\\Users\\me\\projects\\app";
     const base = { anchorPath: legacy, adoptedAnchor: true, isMultiRoot: true } as const;
 
     it("reclaims index 1 and drops stale folders without touching index 0", () => {
-      const plan = planFolders({ ...base, folders: folders(legacy, stale, tracked), trackedPath: tracked, target: "C:\\Users\\me\\Documents\\Projects\\other-repo" });
-      assert.deepEqual(plan, { kind: "reclaim", index: 1, deleteCount: 2, add: ["C:\\Users\\me\\Documents\\Projects\\other-repo"] });
+      const plan = planFolders({ ...base, folders: folders(legacy, stale, tracked), trackedPath: tracked, target: "C:\\Users\\me\\projects\\other-repo" });
+      assert.deepEqual(plan, { kind: "reclaim", index: 1, deleteCount: 2, add: ["C:\\Users\\me\\projects\\other-repo"] });
     });
 
     it("reclaims an untracked folder at index 1 instead of appending after it", () => {
