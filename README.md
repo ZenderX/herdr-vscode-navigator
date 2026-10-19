@@ -43,7 +43,7 @@ To try it without installing, open this repository in VS Code and press F5 to st
 
 | Mode | What happens | Cost |
 |---|---|---|
-| `workspace` (default) | The window becomes an untitled multi-root workspace: an extension-owned empty anchor folder plus the followed folder, replaced in place. No reloads after the first conversion. | The anchor is a second root, so Source Control lists the repository of every root (each workspace folder contributes its own). |
+| `workspace` (default) | The window becomes a multi-root workspace saved as a file (`navigator.code-workspace`): an extension-owned empty anchor folder plus the followed folder, replaced in place. One reload at the first conversion, none after it. | The anchor is a second root, so Source Control lists the repository of every root (each workspace folder contributes its own). |
 | `folder` | The followed directory is opened as the window's single folder with VS Code's open-folder command in the same window. | Every switch reloads the window (median about 850 ms measured, runs 860/850/818 ms). VS Code closes the integrated terminal on each switch, including the herdr client running in it; run `herdr` again in a new terminal afterwards (the herdr session keeps running on its server). |
 
 With `herdrNavigator.followGitRoot` (default on), the followed directory is first snapped to the root of its Git repository: the nearest ancestor (the directory itself included) that contains a `.git` entry, a directory in a normal clone or a file in a worktree or submodule. A pane in `repo/src/game` therefore follows `repo`, and moving between subfolders of the same repository changes nothing. Outside a repository the exact directory is followed. Turn the setting off to follow the exact directory.
@@ -59,15 +59,23 @@ In `folder` mode the first switch shows a modal confirmation (`FOLDER_SWITCH_NOT
 #### `workspace` mode details
 
 - The anchor is always an extension-owned empty directory under the extension's global storage, never one of your folders. The `herdrNavigator.anchorFolder` setting was removed.
-- The first switch in a single-folder or empty window converts it to an untitled multi-root workspace. This restarts extensions once. There is no window reload, and shell terminals are expected to keep running (not yet verified empirically; see `docs/smoke-test.md`). The extension saves its intent beforehand and resumes after the restart.
+- The first switch in a single-folder window converts it to the saved navigator workspace (see below) by reopening the same window on it. That reloads the window once, which closes its integrated terminals. A herdr client running in one of them is closed with it, but herdr's panes and agents keep running on its server, and the extension relaunches herdr in the converted window. The extension saves its intent beforehand and resumes after the reload.
 - Only the window that hosts herdr follows automatically. A window hosts herdr when a running `herdr.exe` is a descendant of one of its integrated-terminal shells, following Windows parent links plus Git Bash's own process graph from `ps -W` when Git for Windows is installed (Git Bash otherwise hides the link; the window is then treated as undetermined) (checked at startup, when terminals open or close, on Reconnect, before any conversion, and on herdr focus events while the window is not known to host herdr, so starting herdr in an already-open terminal is picked up without Reconnect; scans are limited to one per 5 s, and a hosting window re-verifies at most every 30 s, so quitting herdr stops auto-follow). Other windows stay connected but ignore auto-follow; `Follow Focused Pane Now` still works in any window. If detection fails, the first automatic follow of any kind (convert, add, replace, or remove) asks for confirmation; the answer is remembered for the window, including across the conversion. Escape declines until Reconnect; "Herdr: Reconnect" also clears a remembered decline so you are asked again.
 - After reopening a single-folder window, the first follow converts it again.
 - Later switches replace the second root in place with no restart.
-- VS Code may ask to save the untitled workspace when you close the window.
+- Closing the window never asks to save a workspace: it is already a file.
+
+### Navigator workspace file and the jump list
+
+The navigator workspace is `navigator.code-workspace`, stored in the anchor folder under the extension's global storage (`<globalStorage>/anchor/navigator.code-workspace`), never in one of your folders. Because it is a saved workspace, VS Code restores it like any other: relaunching VS Code with no arguments brings the navigator window back, and herdr is relaunched in it.
+
+Earlier versions used an untitled workspace. VS Code always restores untitled workspaces at startup, even when you start it with a folder, so choosing a folder from the taskbar jump list (or running `code <folder>`) left a second, restored navigator window next to the one you asked for. Now, when you open a folder that way after a session in which the navigator ran, and no navigator window of this VS Code launch is running, the window you opened becomes the navigator: it is converted to `[anchor, <folder>]` (one reload) and hosts herdr focused on that folder. Opening a folder in a new window while the navigator is already running leaves that window a plain folder window.
+
+If you have an existing untitled navigator workspace, the extension shows one message on the next start explaining that it is moving the workspace into a file. VS Code then asks once whether to save the old untitled workspace; choose Don't Save. This prompt comes from VS Code and cannot be avoided by the extension.
 
 ### Window title
 
-In a navigator window the title bar reads `herdr-navigation (Workspace)` instead of `Untitled (Workspace)`. The extension writes your effective `window.title` template (with `${rootName}` replaced) to the workspace settings of the untitled workspace only: no `.code-workspace` file is saved and your user settings are never touched. A workspace-level `window.title` you set yourself is left alone.
+In a navigator window the title bar reads `herdr-navigation (Workspace)` instead of `navigator (Workspace)`. The extension writes your effective `window.title` template (with `${rootName}` replaced) to the workspace settings of the navigator workspace only, which are stored in `navigator.code-workspace`; your user settings are never touched. A workspace-level `window.title` you set yourself is left alone.
 
 ### Auto-launch
 
@@ -105,7 +113,7 @@ A status bar item on the left shows `herdr: <folder>` or `herdr: disconnected`; 
 | `herdrNavigator.autoFollow` | `true` | Follow herdr focus changes and `cd` in the focused pane automatically |
 | `herdrNavigator.socketPath` | `""` | herdr socket marker path. Empty uses `HERDR_SOCKET_PATH`, else `%APPDATA%\herdr\herdr.sock`. Honored only in user (local or remote) settings; workspace and folder values are ignored |
 | `herdrNavigator.cwdSource` | `auto` | `auto` (foreground process cwd if known, else pane cwd), `pane`, or `foreground` |
-| `herdrNavigator.followMode` | `workspace` | `workspace` (untitled multi-root, no reloads) or `folder` (single folder, reloads the window and closes the terminal on every switch) |
+| `herdrNavigator.followMode` | `workspace` | `workspace` (saved multi-root workspace, one reload at conversion) or `folder` (single folder, reloads the window and closes the terminal on every switch) |
 | `herdrNavigator.followGitRoot` | `true` | Follow the Git repository root containing the focused pane's directory instead of the exact directory |
 | `herdrNavigator.autoLaunch` | `true` | Relaunch herdr in an editor-area terminal when VS Code restores a navigator window in which herdr was running |
 | `herdrNavigator.debounceMs` | `150` | Milliseconds to coalesce bursts of focus events |

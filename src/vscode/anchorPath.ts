@@ -6,6 +6,11 @@ export function anchorDirPath(globalStoragePath: string): string {
   return path.join(globalStoragePath, "anchor");
 }
 
+/** The saved navigator workspace lives inside the anchor so its parent folder is the already-trusted anchor. */
+export function workspaceFilePath(anchorPath: string): string {
+  return path.join(anchorPath, "navigator.code-workspace");
+}
+
 const LEGACY_ID_DIR = /^[^\\/]+\.herdr-navigator$/i;
 
 /** True for `<globalStorage parent>/<any id>.herdr-navigator/anchor`: an anchor left by an earlier publisher ID of this extension. */

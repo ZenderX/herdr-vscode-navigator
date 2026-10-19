@@ -37,6 +37,19 @@ describe("sessionState", () => {
     assert.deepEqual(readRecord({ version: 1, herdrWasRunning: "yes", updatedAt: 1 }), empty());
   });
 
+  it("hostingSeen records the launch id; records without one, or with only the old sessionId, parse without one", () => {
+    const next = reduce(empty(), { type: "hostingSeen", launchId: "s1" }, 1);
+    assert.equal(readRecord(JSON.parse(JSON.stringify(next))).launchId, "s1");
+    assert.equal(readRecord({ version: 1, herdrWasRunning: true, updatedAt: 1 }).launchId, undefined);
+    assert.equal(readRecord({ version: 1, herdrWasRunning: true, sessionId: "s1", updatedAt: 1 }).launchId, undefined);
+  });
+
+  it("takeoverConsumed clears the pending folder", () => {
+    const pending = reduce(empty(), { type: "takeoverPending", folder: "/w/web" }, 1);
+    assert.equal(readRecord(JSON.parse(JSON.stringify(pending))).pendingTakeoverFolder, "/w/web");
+    assert.equal("pendingTakeoverFolder" in reduce(pending, { type: "takeoverConsumed" }, 2), false);
+  });
+
   it("a valid record round-trips", () => {
     const rec = reduce(reduce(empty(), { type: "hostingSeen" }, 1), { type: "spaceFocused", label: "a", folder: "/f" }, 2);
     assert.deepEqual(readRecord(JSON.parse(JSON.stringify(rec))), rec);

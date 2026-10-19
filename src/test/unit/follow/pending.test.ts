@@ -54,7 +54,8 @@ function resume(overrides: Partial<ResumeDeps>) {
   const deps: ResumeDeps = {
     pending: undefined,
     saved: undefined,
-    folders: folders("C:\\anchor"),
+    folders: () => folders("C:\\anchor"),
+    takeover: { record: { at: NOW }, savedNavigator: false, maxAgeMs: 120_000, updateFolders: async () => false },
     now: NOW,
     platform: "win32",
     setTrackedPath: (path) => calls.push(`track:${path}`),
@@ -70,11 +71,11 @@ function resume(overrides: Partial<ResumeDeps>) {
 describe("resumePending", () => {
   it("tracks, saves and clears an open pending target, adopting the confirmation only when confirmed", async () => {
     const open = folders("C:\\anchor", "C:\\w");
-    const confirmed = resume({ pending: { target: "C:\\w", at: NOW, confirmed: true }, folders: open });
+    const confirmed = resume({ pending: { target: "C:\\w", at: NOW, confirmed: true }, folders: () => open });
     await confirmed.run();
     assert.deepEqual(confirmed.calls, ["track:C:\\w", "save:C:\\w", "clear", "adopt"]);
 
-    const unconfirmed = resume({ pending: { target: "C:\\w", at: NOW }, folders: open });
+    const unconfirmed = resume({ pending: { target: "C:\\w", at: NOW }, folders: () => open });
     await unconfirmed.run();
     assert.deepEqual(unconfirmed.calls, ["track:C:\\w", "save:C:\\w", "clear"]);
   });
@@ -83,10 +84,29 @@ describe("resumePending", () => {
     const { calls, run } = resume({
       pending: { target: "C:\\gone", at: NOW },
       saved: "C:\\s",
-      folders: folders("C:\\anchor", "C:\\s"),
+      folders: () => folders("C:\\anchor", "C:\\s"),
     });
     await run();
     assert.deepEqual(calls, ["track:C:\\s", "save:C:\\s"]);
+  });
+
+  it("moves a fresh takeover folder into slot 1 of a saved navigator and tracks it", async () => {
+    let open = folders("C:\\anchor", "C:\\old");
+    const { calls, run } = resume({
+      folders: () => open,
+      saved: "C:\\old",
+      takeover: {
+        record: { folder: "C:\\t", at: NOW },
+        savedNavigator: true,
+        maxAgeMs: 120_000,
+        updateFolders: async (_kind, _start, _deleteCount, add) => {
+          open = folders("C:\\anchor", ...add);
+          return true;
+        },
+      },
+    });
+    await run();
+    assert.deepEqual(calls, ["track:C:\\t", "save:C:\\t"]);
   });
 
   it("clears a stale or malformed intent", async () => {

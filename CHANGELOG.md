@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- The navigator workspace is now a saved file, `navigator.code-workspace`, in the anchor folder under the extension's global storage, instead of an untitled workspace. VS Code always restores untitled workspaces at startup, so starting it with a folder (taskbar jump list, `code <folder>`) left a second restored navigator window; a saved workspace is restored only when VS Code starts without a folder.
+- Opening a folder after a session in which the navigator ran, with no navigator window of the current VS Code launch alive, makes the window you opened the navigator: it converts to `[anchor, <folder>]` (one reload) and hosts herdr focused on that folder.
+- Converting a single-folder window (first follow, or herdr started by hand) now reloads the window once; herdr's panes keep running and herdr is relaunched in the converted window.
+- One-time migration: an existing untitled navigator workspace is moved to the saved file after a message from the extension; VS Code asks once to save the old untitled workspace (choose Don't Save).
+- The navigator's session record is kept in `globalState` so a plain-folder window can read it; the takeover is skipped when `herdrNavigator.followMode` is `folder`.
+- `scripts/jump-list-repro/` reproduces the jump-list launch in an isolated VS Code and herdr.
+
 ## v0.1.0 — 2026-10-19
 
 - Initial release: follows the focused herdr pane's working directory, so the editor's file tree tracks herdr's focus.

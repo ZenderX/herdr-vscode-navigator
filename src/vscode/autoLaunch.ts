@@ -3,10 +3,13 @@ import type { HostState } from "../hosting";
 import { findWorkspaceIdByLabel } from "../herdr";
 import type { Logger, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
-import { planAutoLaunch } from "../launch/planAutoLaunch";
-import type { LaunchPlan } from "../launch/planAutoLaunch";
+import { LEASE_STALE_MS, TAKEOVER_GRACE_MS } from "../launch/navigatorLease";
+import type { NavigatorLease } from "../launch/navigatorLease";
+import { planAutoLaunch, planTakeover } from "../launch/planAutoLaunch";
+import type { LaunchPlan, WindowKind } from "../launch/planAutoLaunch";
 import { readRecord, reduce } from "../launch/sessionState";
 import type { SessionEvent, SessionRecord } from "../launch/sessionState";
+import { samePath } from "../paths";
 
 export const SESSION_KEY = "herdrNavigator.session";
 const TERMINAL_NAME = "herdr";
@@ -17,6 +20,8 @@ const CONFIRM_LOSS_MS = 5000;
 const CLIENT_POLL_MS = 2000;
 // Bound on follow-up checks after an unknown hosting result, for both loss confirmation and dead-client rechecks.
 const MAX_RETRIES = 3;
+// Well under LEASE_STALE_MS so one missed tick does not let the lease go stale.
+const LEASE_REFRESH_MS = 20_000;
 const RESTORE_POLL_MS = 1000;
 const RESTORE_GIVE_UP_MS = 15_000;
 
@@ -54,10 +59,32 @@ export interface AutoLaunchDeps {
   /** The `TerminalExitReason` values that count as VS Code shutting down and the user closing the terminal. */
   exitReasons: { shutdown: unknown; user: unknown };
   client: () => { snapshot(): Promise<SessionSnapshot>; focusWorkspace(workspaceId: string): Promise<void> };
+  /** One value per VS Code launch, shared by all its windows. */
+  launchId: string;
+  windowKind: () => WindowKind;
+  /** The folder this window shows: the plain window's only folder, or the navigator's followed folder. */
+  windowFolder: () => string | undefined;
+  lease: { read(): NavigatorLease | undefined; write(lease: NavigatorLease): void };
+  /** Converts this plain-folder window into the saved navigator on `folder`; reloads the window. */
+  convertWindow: (folder: string) => Promise<void>;
+  /** Moves a legacy untitled navigator to the saved workspace file; reloads the window. */
+  migrateLegacy: () => Promise<void>;
 }
 
 /** How a terminal closed, as far as shutdown-versus-user attribution needs. */
 export type CloseKind = "shutdown" | "user" | "other";
+
+/** The record lives in globalState so every window of the profile sees it; the pre-upgrade copy in workspaceState is trusted only where the navigator wrote it. */
+export function sessionMemento(
+  global: { get(key: string): unknown; update(key: string, value: unknown): PromiseLike<void> },
+  workspace: { get(key: string): unknown },
+  readsWorkspaceScope: () => boolean,
+): AutoLaunchDeps["memento"] {
+  return {
+    get: (key) => global.get(key) ?? (readsWorkspaceScope() ? workspace.get(key) : undefined),
+    update: (key, value) => global.update(key, value),
+  };
+}
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -89,6 +116,8 @@ export class AutoLaunch {
   private lossTimer: unknown;
   private restoreTimer: unknown;
   private clientTimer: unknown;
+  private takeoverTimer: unknown;
+  private leaseTimer: unknown;
   private watchedPids: readonly number[] = [];
   private deadChecks = 0;
   private confirmRetries = 0;
@@ -100,8 +129,24 @@ export class AutoLaunch {
   /** Opens the settle window; revived terminals may arrive after activation. */
   start(): void {
     this.startedAt = this.deps.clock.now();
+    // First, so a plain-folder window starting in the same launch sees this navigator within its grace delay.
+    this.writeLease();
+    this.scheduleLeaseRefresh();
     for (const { name, state } of this.deps.terminals()) this.logSeen(name, state.isInteractedWith);
     this.restartSettle();
+    this.scheduleTakeover();
+  }
+
+  /** Records that this plain window hosts herdr and is about to reload into the navigator, so the reloaded window relaunches herdr on `folder`. */
+  async beginHostingConversion(folder: string): Promise<void> {
+    this.deps.log("info", `auto-launch: convert-hosting folder=${folder}`);
+    await this.apply({ type: "hostingSeen", launchId: this.deps.launchId });
+    await this.apply({ type: "takeoverPending", folder });
+  }
+
+  /** Records the folder a non-hosting window converts for, so the reloaded navigator moves it into slot 1; herdr is not marked as running. */
+  async recordTakeover(folder: string): Promise<void> {
+    await this.apply({ type: "takeoverPending", folder });
   }
 
   onTerminalOpened({ name, state }: AutoLaunchTerminal): void {
@@ -148,7 +193,11 @@ export class AutoLaunch {
       this.closeSinceSeen = "none";
       this.deps.clock.clearTimeout(this.lossTimer);
       this.lossTimer = undefined;
-      if (!this.record.herdrWasRunning) await this.apply({ type: "hostingSeen" });
+      this.writeLease();
+      // The launch id is refreshed even when the flag is already set, so other windows of this launch see a live navigator.
+      if (!this.record.herdrWasRunning || this.record.launchId !== this.deps.launchId) {
+        await this.apply({ type: "hostingSeen", launchId: this.deps.launchId });
+      }
     } else if (state === "unknown" && this.hosting) {
       // A failed scan says nothing about the client; keep watching the last known one.
       this.watchClients(this.watchedPids);
@@ -166,7 +215,70 @@ export class AutoLaunch {
 
   dispose(): void {
     this.disposed = true;
-    for (const timer of [this.settleTimer, this.lossTimer, this.restoreTimer, this.clientTimer]) this.deps.clock.clearTimeout(timer);
+    for (const timer of [this.settleTimer, this.lossTimer, this.restoreTimer, this.clientTimer, this.takeoverTimer, this.leaseTimer]) this.deps.clock.clearTimeout(timer);
+  }
+
+  private writeLease(): void {
+    if (this.deps.windowKind() !== "navigator-saved") return;
+    try {
+      this.deps.lease.write({ launchId: this.deps.launchId, writtenAt: this.deps.clock.now(), folder: this.deps.windowFolder() ?? "" });
+    } catch (err: unknown) {
+      this.deps.log("warn", `auto-launch: lease write failed: ${errorText(err)}`);
+    }
+  }
+
+  // The lease is the only liveness signal and it expires, so an open navigator keeps it fresh whether or not it hosts herdr.
+  private scheduleLeaseRefresh(): void {
+    if (this.deps.windowKind() !== "navigator-saved") return;
+    this.leaseTimer = this.deps.clock.setTimeout(() => {
+      if (this.disposed) return;
+      this.writeLease();
+      this.scheduleLeaseRefresh();
+    }, LEASE_REFRESH_MS);
+  }
+
+  // A legacy navigator migrates at once; a plain window waits so a restored navigator window can write its lease first.
+  private scheduleTakeover(): void {
+    const kind = this.deps.windowKind();
+    if (kind !== "single-folder" && kind !== "navigator-untitled") return;
+    const delay = kind === "navigator-untitled" ? 0 : TAKEOVER_GRACE_MS;
+    this.takeoverTimer = this.deps.clock.setTimeout(() => {
+      void this.runTakeover().catch((err: unknown) => this.deps.log("error", `auto-launch: ${errorText(err)}`));
+    }, delay);
+  }
+
+  private async runTakeover(): Promise<void> {
+    const { deps } = this;
+    if (this.disposed) return;
+    // Another window of this launch may have recorded its takeover since activation.
+    this.record = readRecord(deps.memento.get(SESSION_KEY));
+    const now = deps.clock.now();
+    const folder = deps.windowFolder();
+    const plan = planTakeover({
+      enabled: deps.enabled(),
+      windowKind: deps.windowKind(),
+      folder,
+      record: this.record,
+      lease: deps.lease.read(),
+      launchId: deps.launchId,
+      now,
+    });
+    if (plan.action === "none") return void deps.log("info", `auto-launch: none ${plan.reason}`);
+    if (plan.action === "legacy-untitled") {
+      deps.log("info", "auto-launch: legacy-untitled");
+      if (folder !== undefined) await this.apply({ type: "takeoverPending", folder });
+      return deps.migrateLegacy();
+    }
+    // A window that hosts herdr converts through the follow path instead, which keeps herdr's focus.
+    if (this.hosting) return void deps.log("info", "auto-launch: none already-hosting");
+    const { pendingTakeoverFolder } = this.record;
+    if (pendingTakeoverFolder !== undefined && now - this.record.updatedAt < LEASE_STALE_MS) {
+      return void deps.log("info", "auto-launch: none takeover-pending");
+    }
+    deps.log("info", `auto-launch: convert-explicit folder=${plan.folder}`);
+    await this.apply({ type: "takeoverPending", folder: plan.folder });
+    // No reload can be detected from here; a pending takeover that no navigator consumes expires on its own.
+    await deps.convertWindow(plan.folder);
   }
 
   // herdr's server is a detached daemon, so leaving the client keeps the socket up; poll the client pids and rescan once all are gone.
@@ -254,6 +366,8 @@ export class AutoLaunch {
 
   private async decide(): Promise<void> {
     const { deps } = this;
+    // The legacy window migrates and reloads; launching herdr into a window about to be replaced would only be lost.
+    if (deps.windowKind() === "navigator-untitled") return void deps.log("info", "auto-launch: none legacy-untitled");
     const herdrPath = await deps.resolveHerdr();
     const terminals = deps.terminals();
     const plan = planAutoLaunch({
@@ -261,6 +375,7 @@ export class AutoLaunch {
       enabled: deps.enabled(),
       isNavigatorWindow: deps.isNavigator(),
       record: this.record,
+      now: deps.clock.now(),
       // Undetectable hosting counts as hosting: a duplicate herdr is worse than a missed relaunch.
       herdrHostingNow: this.lastState !== "no",
       herdrPath,
@@ -268,6 +383,9 @@ export class AutoLaunch {
       terminalName: TERMINAL_NAME,
     });
     this.logPlan(plan);
+    // Only the navigator consumes a takeover, and whatever the plan was: a stale one must not steer a later launch.
+    const { pendingTakeoverFolder } = this.record;
+    if (pendingTakeoverFolder !== undefined && deps.isNavigator()) await this.apply({ type: "takeoverConsumed" });
     if (plan.action === "none") return;
 
     if (plan.action === "reuse") {
@@ -283,20 +401,29 @@ export class AutoLaunch {
       });
       terminal.sendText(plan.command, true);
     }
-    if (plan.focusLabel !== undefined) this.restoreSpace(plan.focusLabel, this.record.lastFolder);
+    if (plan.focusFolder !== undefined) {
+      const { focusFolder } = plan;
+      this.restoreSpace(`space for ${focusFolder}`, (snapshot) =>
+        snapshot.panes.find(({ cwd }) => typeof cwd === "string" && samePath(cwd, focusFolder, deps.platform))?.workspace_id,
+      );
+    } else if (plan.focusLabel !== undefined) {
+      const { focusLabel } = plan;
+      const { lastFolder } = this.record;
+      this.restoreSpace(`space "${focusLabel}"`, (snapshot) => findWorkspaceIdByLabel(snapshot, focusLabel, lastFolder));
+    }
   }
 
   private logPlan(plan: LaunchPlan): void {
     const detail =
       plan.action === "none"
         ? plan.reason
-        : `${plan.action === "reuse" ? `terminal ${plan.terminalIndex}` : plan.name} cwd=${plan.cwd ?? "none"} focus=${plan.focusLabel ?? "none"}`;
+        : `${plan.action === "reuse" ? `terminal ${plan.terminalIndex}` : plan.name} cwd=${plan.cwd ?? "none"} focus=${plan.focusFolder ?? plan.focusLabel ?? "none"}`;
     const unknown = this.lastState === "unknown" ? " (hosting unknown)" : "";
     this.deps.log("info", `auto-launch: ${plan.action} ${detail}${unknown}`);
   }
 
   // Polls until herdr is hosted and answers, then focuses the remembered space once; gives up after a bounded wait.
-  private restoreSpace(label: string, lastFolder: string | undefined): void {
+  private restoreSpace(what: string, find: (snapshot: SessionSnapshot) => string | undefined): void {
     const { deps } = this;
     const deadline = deps.clock.now() + RESTORE_GIVE_UP_MS;
     const finish = (message: string): void => {
@@ -312,16 +439,16 @@ export class AutoLaunch {
           const client = deps.client();
           const snapshot = await client.snapshot();
           if (this.disposed) return;
-          const id = findWorkspaceIdByLabel(snapshot, label, lastFolder);
-          if (id === undefined) return finish(`space "${label}" not found; focus left to herdr`);
+          const id = find(snapshot);
+          if (id === undefined) return finish(`${what} not found; focus left to herdr`);
           await client.focusWorkspace(id);
-          return finish(`focused space "${label}" (${id})`);
+          return finish(`focused ${what} (${id})`);
         }
       } catch (err: unknown) {
         deps.log("warn", `auto-launch: space restore attempt failed: ${errorText(err)}`);
       }
       if (this.disposed) return;
-      if (deps.clock.now() >= deadline) return finish(`gave up focusing space "${label}"`);
+      if (deps.clock.now() >= deadline) return finish(`gave up focusing ${what}`);
       this.restoreTimer = deps.clock.setTimeout(() => void attempt(), RESTORE_POLL_MS);
     };
     this.restoring = true;

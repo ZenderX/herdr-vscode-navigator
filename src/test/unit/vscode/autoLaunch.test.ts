@@ -3,12 +3,18 @@ import { describe, it } from "mocha";
 import type { TerminalLocation } from "vscode";
 import type { SessionSnapshot } from "../../../herdr";
 import type { HostState } from "../../../hosting";
-import { empty } from "../../../launch/sessionState";
+import { activateNavigator, applyFolderPlan } from "../../../follow/applyFolderPlan";
+import { planFolders } from "../../../follow/planFolders";
+import type { NavigatorLease } from "../../../launch/navigatorLease";
+import type { WindowKind } from "../../../launch/planAutoLaunch";
+import { empty, readRecord } from "../../../launch/sessionState";
 import type { SessionRecord } from "../../../launch/sessionState";
-import { AutoLaunch, SESSION_KEY } from "../../../vscode/autoLaunch";
+import { AutoLaunch, SESSION_KEY, sessionMemento } from "../../../vscode/autoLaunch";
 import type { AutoLaunchDeps, AutoLaunchTerminal } from "../../../vscode/autoLaunch";
 
 const EDITOR = 1 as TerminalLocation;
+const LAUNCH = "launch-now";
+const OLD_LAUNCH = "launch-before";
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 class FakeClock {
@@ -81,11 +87,22 @@ interface Harness {
   setRescan: (state: HostState) => void;
   /** Makes later rescans wait until the returned release is called. */
   holdRescan: () => () => void;
+  leaseOnDisk: NavigatorLease | undefined;
+  converted: string[];
+  migrated: number;
 }
 
 function harness(
   initial: SessionRecord | undefined,
-  options: { terminals?: FakeTerminal[]; herdrPath?: string; rescanState?: HostState; platform?: NodeJS.Platform } = {},
+  options: {
+    terminals?: FakeTerminal[];
+    herdrPath?: string;
+    rescanState?: HostState;
+    platform?: NodeJS.Platform;
+    kind?: WindowKind;
+    folder?: string;
+    lease?: NavigatorLease;
+  } = {},
 ): Harness {
   const clock = new FakeClock();
   const store = new Map<string, unknown>();
@@ -138,7 +155,16 @@ function harness(
     isAlive: (pid) => alive.has(pid),
     exitReasons: { shutdown: "shutdown-reason", user: "user-reason" },
     client: () => ({ snapshot: () => Promise.resolve(h.snapshot.value), focusWorkspace: (id) => Promise.resolve(void focused.push(id)) }),
+    launchId: LAUNCH,
+    windowKind: () => options.kind ?? "navigator-saved",
+    windowFolder: () => options.folder,
+    lease: { read: () => h.leaseOnDisk, write: (lease) => void (h.leaseOnDisk = lease) },
+    convertWindow: (folder) => Promise.resolve(void h.converted.push(folder)),
+    migrateLegacy: () => Promise.resolve(void (h.migrated += 1)),
   };
+  h.leaseOnDisk = options.lease;
+  h.converted = [];
+  h.migrated = 0;
   h.auto = new AutoLaunch(deps);
   h.setEnabled = (value) => {
     enabled = value;
@@ -593,5 +619,230 @@ describe("AutoLaunch observeSnapshot", () => {
     await h.auto.observeSnapshot(h.snapshot.value);
     assert.equal(stored(h).lastSpaceLabel, "alpha");
     assert.equal(stored(h).lastFolder, "C:\\proj");
+  });
+});
+
+describe("AutoLaunch takeover wiring", () => {
+  const plain = { kind: "single-folder", folder: "C:\\other" } as const;
+
+  it("converts a plain window after the grace delay when the previous session ran a navigator and no lease exists", async () => {
+    const h = harness(record({ launchId: OLD_LAUNCH }), plain);
+    h.auto.start();
+    await h.clock.advance(2900);
+    assert.deepEqual(h.converted, []);
+    await h.clock.advance(200);
+    assert.deepEqual(h.converted, ["C:\\other"]);
+    assert.equal(stored(h).pendingTakeoverFolder, "C:\\other");
+    assert.ok(h.logs.includes("auto-launch: convert-explicit folder=C:\\other"));
+  });
+
+  it("does not convert when a navigator of this launch holds a live lease, even one written during the grace delay", async () => {
+    const h = harness(record({ launchId: OLD_LAUNCH }), plain);
+    h.auto.start();
+    await h.clock.advance(1000);
+    h.leaseOnDisk = { launchId: LAUNCH, writtenAt: h.clock.now(), folder: "C:\\proj" };
+    await h.clock.advance(2500);
+    assert.deepEqual(h.converted, []);
+    assert.ok(h.logs.includes("auto-launch: none navigator-alive"));
+    assert.equal(stored(h).pendingTakeoverFolder, undefined);
+  });
+
+  it("does not convert when the previous session had no navigator", async () => {
+    const h = harness(record({ herdrWasRunning: false }), plain);
+    h.auto.start();
+    await h.clock.advance(4000);
+    assert.deepEqual(h.converted, []);
+    assert.ok(h.logs.includes("auto-launch: none not-navigator"));
+  });
+
+  it("leaves a window to the other window's takeover when one is already pending", async () => {
+    const h = harness(record({ launchId: OLD_LAUNCH }), plain);
+    h.auto.start();
+    h.store.set(SESSION_KEY, record({ launchId: OLD_LAUNCH, pendingTakeoverFolder: "C:\\first", updatedAt: 0 }));
+    await h.clock.advance(4000);
+    assert.deepEqual(h.converted, []);
+    assert.ok(h.logs.includes("auto-launch: none takeover-pending"));
+  });
+
+  it("never converts a plain window that hosts herdr through the explicit path", async () => {
+    const h = harness(record({ launchId: OLD_LAUNCH }), plain);
+    h.auto.start();
+    await h.auto.onHosting("yes");
+    await h.clock.advance(4000);
+    assert.deepEqual(h.converted, []);
+  });
+
+  it("writes the lease as the first step of a saved navigator's start", () => {
+    const h = harness(record(), { folder: "C:\\proj" });
+    h.auto.start();
+    assert.deepEqual(h.leaseOnDisk, { launchId: LAUNCH, writtenAt: 0, folder: "C:\\proj" });
+  });
+
+  it("keeps the pending takeover of a slow-shutting-down converting window for the reloaded navigator", async () => {
+    const h = harness(record({ launchId: OLD_LAUNCH }), plain);
+    h.auto.start();
+    await h.clock.advance(3100);
+    await h.clock.advance(30_000);
+    assert.equal(stored(h).pendingTakeoverFolder, "C:\\other");
+    h.auto.dispose();
+
+    const navigator = harness(stored(h), { folder: "C:\\other" });
+    navigator.clock.time = h.clock.now();
+    navigator.auto.start();
+    await navigator.auto.onHosting("no");
+    await navigator.clock.advance(1600);
+    assert.equal(navigator.created[0]?.cwd, "C:\\other");
+    assert.equal(stored(navigator).pendingTakeoverFolder, undefined);
+  });
+
+  it("keeps a saved navigator's lease fresh while it never reports hosting", async () => {
+    const h = harness(record(), { folder: "C:\\proj" });
+    h.auto.start();
+    await h.auto.onHosting("unknown");
+    await h.clock.advance(120_000);
+    assert.equal(h.clock.now() - (h.leaseOnDisk?.writtenAt ?? 0) < 60_000, true);
+  });
+
+  it("stops refreshing the lease once disposed", async () => {
+    const h = harness(record(), { folder: "C:\\proj" });
+    h.auto.start();
+    h.auto.dispose();
+    await h.clock.advance(120_000);
+    assert.equal(h.leaseOnDisk?.writtenAt, 0);
+  });
+
+  it("does not write a lease from a plain window", () => {
+    const h = harness(record(), plain);
+    h.auto.start();
+    assert.equal(h.leaseOnDisk, undefined);
+  });
+
+  it("migrates a legacy untitled navigator instead of launching herdr in it", async () => {
+    const h = harness(record(), { kind: "navigator-untitled", folder: "C:\\proj" });
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(2000);
+    assert.equal(h.migrated, 1);
+    assert.equal(h.created.length, 0);
+    assert.equal(stored(h).pendingTakeoverFolder, "C:\\proj");
+    assert.ok(h.logs.includes("auto-launch: legacy-untitled"));
+  });
+
+  it("launches herdr focused on the pending takeover folder once, then clears it", async () => {
+    const h = harness(record({ pendingTakeoverFolder: "C:\\proj", lastFolder: "C:\\elsewhere", lastSpaceLabel: "beta" }), { folder: "C:\\proj" });
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    assert.equal(h.created[0]?.cwd, "C:\\proj");
+    assert.equal(stored(h).pendingTakeoverFolder, undefined);
+    assert.ok(h.logs.includes("auto-launch: create herdr cwd=C:\\proj focus=C:\\proj"));
+    h.setRescan("yes");
+    await h.clock.advance(1100);
+    assert.deepEqual(h.focused, ["w1"]);
+  });
+
+  it("records a pending takeover before a hosting window converts, and marks the navigator as running", async () => {
+    const h = harness(undefined, plain);
+    await h.auto.beginHostingConversion("C:\\other");
+    assert.equal(stored(h).pendingTakeoverFolder, "C:\\other");
+    assert.equal(stored(h).herdrWasRunning, true);
+    assert.equal(stored(h).launchId, LAUNCH);
+    assert.ok(h.logs.includes("auto-launch: convert-hosting folder=C:\\other"));
+  });
+
+  describe("takeover through a kept navigator file", () => {
+    const ANCHOR = "C:\\storage\\anchor";
+    const STALE = "C:\\work\\stale";
+    const TARGET = "C:\\work\\target";
+    const never = (): void => undefined;
+
+    // Fakes a reopened window: the folders are what the kept file holds, and every change is logged in order.
+    const navigatorWindow = (folders: string[], order: string[]) => ({
+      openFolders: () => folders,
+      convert: () => Promise.resolve(true),
+      updateFolders: (_kind: string, start: number, deleteCount: number, add: string[]) => {
+        folders.splice(start, deleteCount, ...add);
+        order.push(`replace ${add.join()}`);
+        return Promise.resolve(true);
+      },
+    });
+
+    const activate = async (h: Harness, folders: string[], order: string[]): Promise<string[]> => {
+      const tracked: string[] = [];
+      const rec = readRecord(h.store.get(SESSION_KEY));
+      await activateNavigator(
+        {
+          takeover: { folder: rec.pendingTakeoverFolder, at: rec.updatedAt },
+          savedNavigator: true,
+          now: h.clock.now(),
+          maxAgeMs: 120_000,
+          resume: (slot) => Promise.resolve(void tracked.push(slot)),
+        },
+        navigatorWindow(folders, order),
+        "win32",
+        never,
+      );
+      return tracked;
+    };
+
+    it("moves a non-hosting window's target into slot 1 of the kept file without marking herdr as running", async () => {
+      const origin = harness(undefined, plain);
+      const plan = planFolders({ folders: [{ path: "C:\\other" }], trackedPath: null, anchorPath: ANCHOR, target: TARGET, isMultiRoot: false, platform: "win32" });
+      const order: string[] = [];
+      const folders = [ANCHOR, STALE];
+      const effects = { ...navigatorWindow(folders, order), openFolders: () => ["C:\\other"], convert: () => Promise.resolve(true) };
+      const handoff = { hostsHerdr: () => false, beginHostingConversion: (f: string) => origin.auto.beginHostingConversion(f), recordTakeover: (f: string) => origin.auto.recordTakeover(f) };
+      assert.equal(await applyFolderPlan(plan, effects, handoff, "win32", never), true);
+      assert.equal(stored(origin).herdrWasRunning, false);
+      assert.equal(stored(origin).launchId, undefined);
+
+      const navigator = harness(stored(origin));
+      assert.deepEqual(await activate(navigator, folders, order), [TARGET]);
+      assert.deepEqual(order, [`replace ${TARGET}`]);
+      assert.deepEqual(folders, [ANCHOR, TARGET]);
+    });
+
+    it("replaces slot 1 first, then auto-launch consumes the takeover once", async () => {
+      const h = harness(record({ pendingTakeoverFolder: TARGET, updatedAt: 0 }), { folder: TARGET });
+      const order: string[] = [];
+      const folders = [ANCHOR, STALE];
+      assert.deepEqual(await activate(h, folders, order), [TARGET]);
+      assert.equal(stored(h).pendingTakeoverFolder, TARGET);
+      h.auto.start();
+      await h.auto.onHosting("no");
+      await h.clock.advance(1600);
+      assert.deepEqual(order, [`replace ${TARGET}`]);
+      assert.equal(stored(h).pendingTakeoverFolder, undefined);
+      assert.equal(h.logs.filter((line) => line.includes("(takeoverConsumed)")).length, 1);
+    });
+
+    it("tracks slot 1 and consumes the takeover without a change when it already holds the folder", async () => {
+      const h = harness(record({ pendingTakeoverFolder: TARGET, updatedAt: 0 }), { folder: TARGET });
+      const order: string[] = [];
+      assert.deepEqual(await activate(h, [ANCHOR, TARGET], order), [TARGET]);
+      h.auto.start();
+      await h.auto.onHosting("no");
+      await h.clock.advance(1600);
+      assert.deepEqual(order, []);
+      assert.equal(stored(h).pendingTakeoverFolder, undefined);
+      assert.equal(h.logs.filter((line) => line.includes("(takeoverConsumed)")).length, 1);
+    });
+  });
+
+  it("does not let a plain window read the navigator-scoped record left in its own workspaceState", async () => {
+    const store = new Map<string, unknown>();
+    const globalState = { get: (key: string) => store.get(key), update: (key: string, value: unknown) => Promise.resolve(void store.set(key, value)) };
+    const workspaceState = new Map<string, unknown>([[SESSION_KEY, record({ launchId: OLD_LAUNCH })]]);
+    const memento = (legacy: boolean): AutoLaunchDeps["memento"] => sessionMemento(globalState, workspaceState, () => legacy);
+    assert.equal(memento(false).get(SESSION_KEY), undefined);
+    assert.deepEqual(memento(true).get(SESSION_KEY), record({ launchId: OLD_LAUNCH }));
+    store.set(SESSION_KEY, record());
+    assert.deepEqual(memento(true).get(SESSION_KEY), record());
+  });
+
+  it("stamps the launch on hosting even when the previous launch already set the flag", async () => {
+    const h = harness(record({ launchId: OLD_LAUNCH }));
+    await h.auto.onHosting("yes");
+    assert.equal(stored(h).launchId, LAUNCH);
   });
 });

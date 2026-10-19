@@ -6,8 +6,10 @@ import { nodeProbeDeps } from "./cwd/nodeDeps";
 import {
   CwdPoller,
   FollowController,
+  applyFolderPlan,
   createHostState,
   isPendingTarget,
+  planWorkspaceFile,
   pollIntervalMs,
   resumePending,
   routeHerdrEvent,
@@ -16,12 +18,16 @@ import {
 import type { FolderPlan, PendingTarget } from "./follow";
 import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, SessionSnapshot } from "./herdr";
+import { readLease, writeLease } from "./launch/navigatorLease";
+import { PENDING_TAKEOVER_MAX_MS } from "./launch/planAutoLaunch";
+import type { WindowKind } from "./launch/planAutoLaunch";
+import { readRecord } from "./launch/sessionState";
 import { resolveOnPath } from "./launch/whichHerdr";
 import { DIAGNOSTIC_TOPICS, channelWriter, createLog, errorText } from "./log";
 import type { DiagnosticLog } from "./log";
 import { samePath } from "./paths";
 import { resolveAnchor } from "./vscode/anchor";
-import { AutoLaunch } from "./vscode/autoLaunch";
+import { AutoLaunch, SESSION_KEY, sessionMemento } from "./vscode/autoLaunch";
 import { createFollowConsent } from "./vscode/followConsent";
 import type { FollowConsent } from "./vscode/followConsent";
 import { createHerdrConnection } from "./vscode/herdrConnection";
@@ -33,13 +39,33 @@ import { affectsSettings, readSettings, setAutoFollow } from "./vscode/settings"
 import type { Settings } from "./vscode/settings";
 import { StatusBar } from "./vscode/statusBar";
 import { createWindowTitleSync } from "./vscode/windowTitle";
-import { applyPlan, describeWorkspace, getFolders, isMultiRoot, openFolder } from "./vscode/workspaceAdapter";
+import {
+  convertToNavigatorWorkspace,
+  describeWorkspace,
+  getFolders,
+  isMultiRoot,
+  openFolder,
+  workspaceEffects,
+  workspaceFileScheme,
+} from "./vscode/workspaceAdapter";
 
+const LEASE_FILE = "navigator-lease.json";
+const MIGRATION_NOTICE =
+  "Herdr Navigator is moving its workspace into a file so VS Code stops restoring a stray extra window. VS Code will ask once whether to save the old untitled workspace; choose Don't Save.";
+const MIGRATION_CONFIRM = "Continue";
 const PENDING_KEY = "herdrNavigator.pending";
 const TRACKED_KEY = "herdrNavigator.tracked";
 const LAST_FOLLOWED_KEY = "herdrNavigator.lastFollowed";
 
 const timers = { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as NodeJS.Timeout) };
+
+// VSCODE_PID is the main process, shared by every window of one launch; the per-window session id changes on every reload.
+function launchId(log: Logger): string {
+  const { VSCODE_PID: pid } = process.env;
+  if (pid !== undefined && pid !== "") return pid;
+  log("warn", "launch id: VSCODE_PID absent, falling back to sessionId (per window)");
+  return vscode.env.sessionId;
+}
 
 // A reload we caused leaves the followed folder open and its path persisted: skip the first switch, then forget it so it cannot suppress forever.
 async function consumeOwnReload(context: vscode.ExtensionContext, platform: NodeJS.Platform, log: Logger): Promise<boolean> {
@@ -83,16 +109,23 @@ interface AutoLaunchEnv {
   platform: NodeJS.Platform;
   log: Logger;
   isNavigatorWindow: () => boolean;
+  windowKind: () => WindowKind;
+  windowFolder: () => string | undefined;
+  anchorPath: () => string;
+  chosenAnchor: () => AnchorChoice;
   requestHosting: (force?: boolean) => Promise<void>;
   newClient: () => HerdrClient;
 }
 
 function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
+  const { context, log, windowFolder } = env;
+  const leaseFile = join(context.globalStorageUri.fsPath, LEASE_FILE);
   return new AutoLaunch({
     platform: env.platform,
-    log: env.log,
+    log,
     clock: { ...timers, now: () => Date.now() },
-    memento: env.context.workspaceState,
+    // Shared by all windows: a plain-folder window must read what the navigator recorded.
+    memento: sessionMemento(context.globalState, context.workspaceState, () => env.windowKind() === "navigator-untitled"),
     enabled: () => vscode.workspace.getConfiguration("herdrNavigator").get<boolean>("autoLaunch", true),
     isNavigator: env.isNavigatorWindow,
     terminals: () => vscode.window.terminals,
@@ -103,6 +136,21 @@ function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
     recheck: () => env.requestHosting(),
     exitReasons: { shutdown: vscode.TerminalExitReason.Shutdown, user: vscode.TerminalExitReason.User },
     client: env.newClient,
+    launchId: launchId(log),
+    windowKind: env.windowKind,
+    windowFolder,
+    lease: {
+      read: () => readLease(leaseFile),
+      write: (lease) => writeLease(leaseFile, lease),
+    },
+    convertWindow: async (folder) => {
+      await convertToNavigatorWorkspace(env.anchorPath(), folder, log);
+    },
+    migrateLegacy: async () => {
+      const choice = await vscode.window.showInformationMessage(MIGRATION_NOTICE, { modal: true }, MIGRATION_CONFIRM);
+      if (choice !== MIGRATION_CONFIRM) return log("info", "auto-launch: legacy migration declined; asked again next start");
+      await convertToNavigatorWorkspace(env.chosenAnchor().path, windowFolder() ?? env.chosenAnchor().path, log);
+    },
   });
 }
 
@@ -158,6 +206,8 @@ interface ControllerEnv {
   settings: () => Settings;
   followedByOwnReload: boolean;
   consent: FollowConsent;
+  host: ReturnType<typeof createHostState>;
+  autoLaunch: AutoLaunch;
   newClient: () => HerdrClient;
   refreshAnchor: () => Promise<void>;
   chosenAnchor: () => AnchorChoice;
@@ -217,7 +267,17 @@ function createController(env: ControllerEnv): FollowController {
           return false;
         }
       }
-      const applied = await applyPlan(plan, log);
+      const applied = await applyFolderPlan(
+        plan,
+        workspaceEffects(log),
+        {
+          hostsHerdr: () => env.host.get() !== "no",
+          beginHostingConversion: (folder) => env.autoLaunch.beginHostingConversion(folder),
+          recordTakeover: (folder) => env.autoLaunch.recordTakeover(folder),
+        },
+        platform,
+        log,
+      );
       if (!applied || plan.kind === "noop") return applied;
       const tracked = plan.kind === "remove" ? null : (plan.add[plan.add.length - 1] ?? null);
       await context.workspaceState.update(TRACKED_KEY, tracked);
@@ -315,6 +375,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const first = getFolders()[0]?.path;
     return first !== undefined && isMultiRoot() && samePath(first, chosenAnchor().path, platform);
   };
+  const windowKind = (): WindowKind => {
+    const folders = getFolders();
+    const anchor = chosenAnchor().path;
+    // The target is irrelevant to classifying the window; the window's own folder stands in.
+    const shape = planWorkspaceFile({ folders, workspaceFileScheme: workspaceFileScheme(), anchorPath: anchor, target: folders[0]?.path ?? anchor, platform });
+    if (shape.action === "legacy-untitled") return "navigator-untitled";
+    if (shape.action === "already-saved-navigator") return "navigator-saved";
+    const plain = shape.action === "write-file-and-open" && folders.length === 1 && !samePath(folders[0].path, anchor, platform);
+    return plain && settings.followMode === "workspace" ? "single-folder" : "other";
+  };
+  const windowFolder = (): string | undefined => getFolders()[isNavigatorWindow() ? 1 : 0]?.path;
   const refreshWindowTitle = createTitleRefresher(platform, log, isNavigatorWindow);
   const socketName = (): string => resolvePipeName(settings.socketPath, process.env, platform);
   // A fresh client per call: the socket path setting can change at runtime.
@@ -344,7 +415,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     requestHosting,
     refreshStatus: () => refreshStatus(),
   });
-  const autoLaunch = createAutoLaunch({ context, platform, log, isNavigatorWindow, requestHosting, newClient });
+  const autoLaunch = createAutoLaunch({
+    context,
+    platform,
+    log,
+    isNavigatorWindow,
+    windowKind,
+    windowFolder,
+    anchorPath: () => anchorPath,
+    chosenAnchor,
+    requestHosting,
+    newClient,
+  });
   hostingMonitor.subscribe(({ state, clientPids }) => {
     const was = consent.autoAllowed();
     host.set(state);
@@ -361,6 +443,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     settings: () => settings,
     followedByOwnReload,
     consent,
+    host,
+    autoLaunch,
     newClient,
     refreshAnchor: async () => void (anchorPath = await resolveAnchor(context)),
     chosenAnchor,
@@ -402,10 +486,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     poller.start(pollIntervalMs({ connected, autoFollow, host: host.get(), confirmedHere: consent.confirmedHere(), cwdPollMs: settings.cwdPollMs }));
   }
 
+  // The saved file is reopened untouched, so the takeover folder is moved into slot 1 here, before the controller can see a herdr event; auto-launch consumes the record.
+  const sessionRecord = readRecord(context.globalState.get<unknown>(SESSION_KEY));
   await resumePending({
     pending: context.globalState.get<unknown>(PENDING_KEY),
     saved: context.workspaceState.get<string>(TRACKED_KEY),
-    folders: getFolders(),
+    folders: getFolders,
+    takeover: {
+      record: { folder: sessionRecord.pendingTakeoverFolder, at: sessionRecord.updatedAt },
+      savedNavigator: windowKind() === "navigator-saved",
+      maxAgeMs: PENDING_TAKEOVER_MAX_MS,
+      updateFolders: workspaceEffects(log).updateFolders,
+    },
     now: Date.now(),
     platform,
     setTrackedPath: (path) => controller.setTrackedPath(path),

@@ -26,7 +26,7 @@ Manual procedure. Needs herdr 0.9.5 and two directories, `A` and `B`, that you c
 8. Quit herdr, then run "Herdr: Reconnect" after restarting it.
    Expected: the status bar shows `herdr: disconnected` while herdr is down and returns to a folder name after reconnect.
 
-9. Close the window (choose Don't Save if prompted for the untitled workspace), then reopen the repository.
+9. Close the window (no save prompt: the navigator workspace is a saved file), then reopen the repository.
    Expected: the window opens as a single folder; once a terminal runs herdr, the extension detects hosting, reconnects, and the first follow converts the window to multi-root again. A second VS Code window with no herdr in its terminal never converts on its own.
 
 ## Window title
@@ -57,6 +57,21 @@ Paste back these output channel lines:
 - `auto-launch: record herdrWasRunning=` lines and `hosting herdr:` lines.
 - `window title:` lines.
 - Whether herdr restored its own session or started fresh.
+
+## Saved navigator workspace and the jump list
+
+`scripts/jump-list-repro/run.ps1` runs scenarios A to D in an isolated VS Code (see its README); these are the manual equivalents. Needs herdr on PATH and the installed VSIX in a normal window, not F5. The navigator workspace is `navigator.code-workspace` in the extension's global storage, in the `anchor` folder.
+
+1. Manual start (E). Open a folder `A` as a plain window with no earlier navigator session. Start `herdr` in its terminal with the focused pane in another directory `C`.
+   Expected: log `auto-launch: convert-hosting folder=C`, one window reload, then the title shows the navigator and the log has `auto-launch: create herdr` (or `reuse`) with focus on `C`; the window's workspace file is `navigator.code-workspace` with folders `[anchor, C]`. Check `pending: reconciled after restart` appears (the pending takeover survived the reload).
+2. Jump list (A). Quit VS Code fully while the navigator ran. Start it again by choosing folder `B` from the taskbar jump list (or `code B`).
+   Expected: exactly one VS Code window, a navigator whose folders are `[anchor, B]`; log `auto-launch: convert-explicit` followed by `auto-launch: create herdr` with focus on `B`. No untitled workspace is created (the `Workspaces` folder of the user data directory stays empty).
+3. No arguments (B). Quit, then start VS Code with no folder.
+   Expected: the saved navigator window is restored and herdr is relaunched in it.
+4. Second window (C). With the navigator running, open folder `A` in a new window.
+   Expected: log `auto-launch: none navigator-alive`; the new window stays a plain folder window and does not reload.
+5. Legacy migration (D). With the previous release's behaviour (or by converting a window with `updateWorkspaceFolders` in a probe), create an untitled `[anchor, folder]` workspace, quit, relaunch.
+   Expected: log `auto-launch: legacy-untitled`, a message that the workspace is moving into a file; after Continue, VS Code asks once to save the old untitled workspace (choose Don't Save); the window reloads as the saved navigator and herdr starts in it.
 
 ## Diagnosing a follow with the log
 

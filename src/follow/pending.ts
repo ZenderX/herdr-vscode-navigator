@@ -1,5 +1,7 @@
 import type { Logger } from "../herdr";
 import { samePath } from "../paths";
+import { activateNavigator } from "./applyFolderPlan";
+import type { PendingTakeover, PlanEffects } from "./applyFolderPlan";
 import type { FolderLike } from "./planFolders";
 
 export const PENDING_STALE_MS = 2 * 60_000;
@@ -51,7 +53,15 @@ export interface ResumeDeps {
   pending: unknown;
   /** The tracked slot saved for this workspace. */
   saved: string | undefined;
-  folders: readonly FolderLike[];
+  /** Live: a takeover edits the open folders before the pending intent is reconciled. */
+  folders: () => readonly FolderLike[];
+  /** The recorded takeover folder, applied to a saved navigator before the slot is resumed. */
+  takeover: {
+    record: PendingTakeover;
+    savedNavigator: boolean;
+    maxAgeMs: number;
+    updateFolders: PlanEffects["updateFolders"];
+  };
   now: number;
   platform: NodeJS.Platform;
   setTrackedPath: (path: string) => void;
@@ -64,16 +74,28 @@ export interface ResumeDeps {
 
 /** Resumes after the one-time extension-host restart: prefers the pending target, else the saved tracked slot. */
 export async function resumePending(deps: ResumeDeps): Promise<void> {
-  const { pending, saved, folders, now, platform, log } = deps;
+  const { pending, saved, takeover, now, platform, log } = deps;
+  await activateNavigator(
+    {
+      takeover: takeover.record,
+      savedNavigator: takeover.savedNavigator,
+      pendingTarget: isPendingTarget(pending) ? pending.target : undefined,
+      savedSlot: saved,
+      now,
+      maxAgeMs: takeover.maxAgeMs,
+      resume: async (slot) => {
+        deps.setTrackedPath(slot);
+        // The converted window has a new workspaceState scope, so the slot must be saved again here.
+        await deps.saveTracked(slot);
+      },
+    },
+    { openFolders: () => deps.folders().map(({ path }) => path), updateFolders: takeover.updateFolders },
+    platform,
+    log,
+  );
+  const folders = deps.folders();
   const isOpen = (candidate: string | undefined): candidate is string =>
     candidate !== undefined && folders.slice(1).some(({ path }) => samePath(path, candidate, platform));
-  const pendingTarget = isPendingTarget(pending) ? pending.target : undefined;
-  const resumed = [pendingTarget, saved].find(isOpen);
-  if (resumed) {
-    deps.setTrackedPath(resumed);
-    // The converted window has a new workspaceState scope, so the slot must be saved again here.
-    await deps.saveTracked(resumed);
-  }
   // globalState is shared by all windows: clear only an intent this window consumed, or a stale/malformed one.
   const outcome = reconcilePending(pending, folders, now, platform);
   if (outcome.action !== "none") log("info", `pending: ${outcome.message}`);
