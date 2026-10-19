@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.0 — 2026-10-19
 
 - Initial release: follows the focused herdr pane's working directory, so the editor's file tree tracks herdr's focus.
 - Follow modes (`herdrNavigator.followMode`): `workspace` (default) keeps an extension-owned empty anchor folder plus a replaceable second root with no reloads after the first conversion; `folder` opens the followed directory as the window's single folder, which reloads the window on every switch.
