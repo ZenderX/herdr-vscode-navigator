@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.2 — 2026-10-20
 
 - Rewrote the README.
 
