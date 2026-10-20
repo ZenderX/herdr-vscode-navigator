@@ -129,7 +129,27 @@ describe("HerdrClient", () => {
       await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).processInfo("w1:p1"), /no shell_pid/);
     });
 
-    it("focusWorkspace sends workspace.focus with workspace_id", async () => {
+    it("pane sends pane.get with pane_id and returns the pane", async () => {
+      server = await startServer((req, socket) =>
+        reply(socket, req.id, { type: "pane_info", pane: { pane_id: "w1:p1", focused: true, cwd: "/a" } }),
+      );
+      const pane = await new HerdrClient({ pipeName: server.pipeName }).pane("w1:p1");
+      assert.equal(pane.cwd, "/a");
+      assert.equal(server.requests[0].method, "pane.get");
+      assert.deepEqual(server.requests[0].params, { pane_id: "w1:p1" });
+    });
+
+    it("pane rejects a response without a pane and a pane_not_found error", async () => {
+      server = await startServer((req, socket) => reply(socket, req.id, { type: "pane_info" }));
+      await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).pane("w1:p1"), /no pane/);
+      await server.close();
+      server = await startServer((req, socket) =>
+        socket.write(`${JSON.stringify({ id: req.id, error: { code: "pane_not_found", message: "gone" } })}\n`),
+      );
+      await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).pane("w1:p9"), /pane_not_found: gone/);
+    });
+
+    it("focusWorkspace sends workspace.focus with workspace_id",async () => {
       server = await startServer((req, socket) => reply(socket, req.id, { type: "workspace_info", workspace: { workspace_id: "w4" } }));
       await new HerdrClient({ pipeName: server.pipeName }).focusWorkspace("w4");
       assert.equal(server.requests[0].method, "workspace.focus");

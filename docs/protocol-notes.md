@@ -54,6 +54,19 @@ result: { type: "pane_process_info", process_info: { pane_id, shell_pid, foregro
 - `foreground_process_group_id`: optional; never present on Windows.
 - `foreground_processes[].cwd`: optional; on Windows it does not reliably track a later `cd`.
 
+## pane.get
+
+Read-only; whitelisted. Used by the cwd poll so a tick fetches one pane instead of `session.snapshot`. Captured 2026-10-19, herdr 0.9.5 (protocol 22) on Windows. Commands (all read-only): `herdr --version`; `herdr api schema --json` (request `pane.get` takes `PaneTarget` = `{ pane_id: string }`, success result `{ type: "pane_info", pane: PaneInfo }`); then one `session.snapshot` to read `focused_pane_id`, one `pane.get` for that id and one for a nonexistent id, over the named pipe with a throwaway script (same framing as `scripts/herdr-probe.mjs`).
+
+Request: `{"id":"x","method":"pane.get","params":{"pane_id":"w1:p1"}}`. Response (paths redacted, trimmed):
+
+```json
+{"id":"x","result":{"type":"pane_info","pane":{"pane_id":"w1:p1","terminal_id":"term_<id>","workspace_id":"w1","tab_id":"w1:t1","focused":true,"cwd":"C:\\Users\\<you>\\proj","agent":"claude","terminal_title":"<title>","agent_status":"idle","scroll":{"offset_from_bottom":0,"max_offset_from_bottom":0,"viewport_rows":57},"revision":2}}}
+```
+
+- The pane object is the same shape as a snapshot pane: `cwd` and `focused` are present; `foreground_cwd` was absent here (as in the snapshot when there is none), so treat it like the snapshot.
+- Unknown id: `{"id":"x","error":{"code":"pane_not_found","message":"pane <id> not found"}}`; the client rejects on it and the poller falls back to a snapshot.
+
 ## workspace.focus
 
 Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no live request was sent. This is the only request the extension sends that changes herdr state (used by auto-launch to re-select a space).

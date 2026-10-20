@@ -46,7 +46,8 @@ function pane(id: string, focused: boolean, cwd: string, foreground?: string): P
 interface Harness {
   poller: CwdPoller;
   clock: FakeClock;
-  state: { focused: string; panes: PaneInfo[]; fetches: number; changes: number; busy: boolean; active: boolean; hold: Promise<void> | null };
+  // `fetches` counts every poll request (snapshot or pane.get); the two counters split it.
+  state: { focused: string; panes: PaneInfo[]; fetches: number; snapshots: number; paneGets: number; paneError: Error | null; changes: number; busy: boolean; active: boolean; hold: Promise<void> | null };
 }
 
 function harness(cwdSource: CwdSource = "auto"): Harness {
@@ -55,6 +56,9 @@ function harness(cwdSource: CwdSource = "auto"): Harness {
     focused: "p1",
     panes: [pane("p1", true, "/a"), pane("p2", false, "/x")],
     fetches: 0,
+    snapshots: 0,
+    paneGets: 0,
+    paneError: null,
     changes: 0,
     busy: false,
     active: true,
@@ -64,6 +68,7 @@ function harness(cwdSource: CwdSource = "auto"): Harness {
     platform: "linux",
     fetchSnapshot: async (): Promise<SessionSnapshot> => {
       state.fetches += 1;
+      state.snapshots += 1;
       if (state.hold) await state.hold;
       return {
         focused_workspace_id: "w",
@@ -73,6 +78,15 @@ function harness(cwdSource: CwdSource = "auto"): Harness {
         tabs: [],
         workspaces: [],
       };
+    },
+    fetchPane: async (paneId): Promise<PaneInfo> => {
+      state.fetches += 1;
+      state.paneGets += 1;
+      if (state.hold) await state.hold;
+      if (state.paneError) throw state.paneError;
+      const found = state.panes.find((candidate) => candidate.pane_id === paneId);
+      if (!found) throw new Error("herdr pane.get failed: pane_not_found");
+      return found;
     },
     getCwdSource: () => cwdSource,
     isBusy: () => state.busy,
@@ -353,6 +367,7 @@ describe("CwdPoller", () => {
         calls += 1;
         throw new Error("down");
       },
+      fetchPane: () => Promise.reject(new Error("down")),
       getCwdSource: () => "auto",
       isBusy: () => false,
       isActive: () => true,
@@ -454,6 +469,91 @@ describe("CwdPoller", () => {
     });
     await tick(h);
     assert.equal(h.state.changes, 1);
+  });
+});
+
+describe("CwdPoller pane.get polling", () => {
+  it("with a known focused pane, every tick is one pane.get and no snapshot", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    await tick(h);
+    assert.equal(h.state.snapshots, 1);
+    for (let i = 0; i < 5; i += 1) await tick(h);
+    assert.equal(h.state.paneGets, 5);
+    assert.equal(h.state.snapshots, 1);
+  });
+
+  it("an id learnt from observe() makes even the first tick a pane.get", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    h.poller.observe({ focused_workspace_id: "w", focused_tab_id: "tab", focused_pane_id: "p1", panes: h.state.panes, tabs: [], workspaces: [] });
+    await tick(h);
+    assert.equal(h.state.paneGets, 1);
+    assert.equal(h.state.snapshots, 0);
+  });
+
+  it("a cwd change seen through pane.get fires onChange once", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    await tick(h);
+    h.state.panes = [pane("p1", true, "/a/b"), pane("p2", false, "/x")];
+    await tick(h);
+    assert.equal(h.state.paneGets, 1);
+    assert.equal(h.state.changes, 1);
+    await tick(h);
+    assert.equal(h.state.changes, 1);
+  });
+
+  it("a pane.get error falls back to a snapshot and the id is re-learnt", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    await tick(h);
+    h.state.paneError = new Error("socket reset");
+    await tick(h);
+    assert.equal(h.state.snapshots, 2);
+    h.state.paneError = null;
+    await tick(h);
+    assert.equal(h.state.snapshots, 2);
+    assert.equal(h.state.paneGets, 2);
+  });
+
+  it("a pane that is gone falls back to the snapshot, which re-learns the new focused pane without firing", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    await tick(h);
+    h.state.focused = "p2";
+    h.state.panes = [pane("p2", true, "/x")];
+    await tick(h);
+    assert.equal(h.state.snapshots, 2);
+    assert.equal(h.state.changes, 0);
+    await tick(h);
+    assert.equal(h.state.snapshots, 2);
+    assert.equal(h.state.paneGets, 2);
+  });
+
+  it("a pane that is no longer focused falls back to the snapshot", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    await tick(h);
+    h.state.focused = "p2";
+    h.state.panes = [pane("p1", false, "/a/b"), pane("p2", true, "/x")];
+    await tick(h);
+    assert.equal(h.state.snapshots, 2);
+    assert.equal(h.state.changes, 0);
+    await tick(h);
+    assert.equal(h.state.paneGets, 2);
+    assert.equal(h.state.snapshots, 2);
+  });
+
+  it("stop forgets the id so the next start begins with a snapshot", async () => {
+    const h = harness();
+    h.poller.start(1000);
+    await tick(h);
+    h.poller.stop();
+    h.poller.start(1000);
+    await tick(h);
+    assert.equal(h.state.snapshots, 2);
+    assert.equal(h.state.paneGets, 0);
   });
 });
 

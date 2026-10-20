@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readlink, stat } from "node:fs/promises";
+import type { Logger } from "../herdr/types";
 import type { ProbeDeps } from "./types";
 
-export function nodeProbeDeps(): ProbeDeps {
+export function nodeProbeDeps(log?: Logger): ProbeDeps {
   return {
+    ...(log ? { log } : {}),
     platform: process.platform,
     env: process.env,
     readlink: (path) => readlink(path),

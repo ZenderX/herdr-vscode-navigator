@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Windows that do not host herdr scan their terminals' processes far less: herdr focus events trigger at most one scan per 30 s (was 5 s); a command starting in a terminal (shell integration) triggers one after about a second.
+- The `cd` poll now asks herdr for the focused pane only (`pane.get`) instead of the full session snapshot each tick; it falls back to a snapshot when the focused pane is unknown, gone, or no longer focused.
 - The navigator workspace is now a saved file, `navigator.code-workspace`, in the anchor folder under the extension's global storage, instead of an untitled workspace. VS Code always restores untitled workspaces at startup, so starting it with a folder (taskbar jump list, `code <folder>`) left a second restored navigator window; a saved workspace is restored only when VS Code starts without a folder.
 - Opening a folder after a session in which the navigator ran, with no navigator window of the current VS Code launch alive, makes the window you opened the navigator: it converts to `[anchor, <folder>]` (one reload) and hosts herdr focused on that folder.
 - Converting a single-folder window (first follow, or herdr started by hand) now reloads the window once; herdr's panes keep running and herdr is relaunched in the converted window.

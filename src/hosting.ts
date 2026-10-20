@@ -2,6 +2,9 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import type { Logger } from "./herdr/types";
+import { createToolResolver } from "./toolPaths";
+import type { Tool } from "./toolPaths";
 
 const execFileAsync = promisify(execFile);
 
@@ -179,13 +182,28 @@ async function readMsysEdges(): Promise<MsysEdge[]> {
   }
 }
 
-export async function readProcessTable(platform: NodeJS.Platform): Promise<{ table: ProcessInfo[]; msysEdges: MsysEdge[] }> {
+// Resolved once per session like findMsysPs; keyed by platform so tests can vary it.
+const toolResolvers = new Map<NodeJS.Platform, (tool: Tool) => string>();
+
+function resolveTool(platform: NodeJS.Platform, tool: Tool, log?: Logger): string {
+  let resolver = toolResolvers.get(platform);
+  if (!resolver) {
+    resolver = createToolResolver({ platform, env: process.env, exists: existsSync, ...(log ? { log } : {}) });
+    toolResolvers.set(platform, resolver);
+  }
+  return resolver(tool);
+}
+
+export async function readProcessTable(
+  platform: NodeJS.Platform,
+  log?: Logger,
+): Promise<{ table: ProcessInfo[]; msysEdges: MsysEdge[] }> {
   if (platform !== "win32") {
-    const { stdout } = await execFileAsync("ps", ["-A", "-o", "pid=,ppid=,args="], { maxBuffer: 32 * 1024 * 1024, timeout: 15_000 });
+    const { stdout } = await execFileAsync(resolveTool(platform, "ps", log), ["-A", "-o", "pid=,ppid=,args="], { maxBuffer: 32 * 1024 * 1024, timeout: 15_000 });
     return { table: parsePsTable(stdout), msysEdges: [] };
   }
   const [{ stdout }, msysEdges] = await Promise.all([
-    execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", PROCESS_TABLE_COMMAND], {
+    execFileAsync(resolveTool(platform, "powershell", log), ["-NoProfile", "-NonInteractive", "-Command", PROCESS_TABLE_COMMAND], {
       maxBuffer: 32 * 1024 * 1024,
       timeout: 15_000,
       windowsHide: true,

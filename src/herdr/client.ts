@@ -5,6 +5,7 @@ import type {
   HerdrClientOptions,
   HerdrEvent,
   Logger,
+  PaneInfo,
   PaneProcessInfo,
   RequestOptions,
   SessionSnapshot,
@@ -132,6 +133,15 @@ export class HerdrClient {
       throw new Error("herdr session.snapshot returned no snapshot");
     }
     return result.snapshot as SessionSnapshot;
+  }
+
+  /** One pane by id; herdr answers an unknown id with a `pane_not_found` error, which rejects. */
+  async pane(paneId: string, options?: RequestOptions): Promise<PaneInfo> {
+    const result = await this.request("pane.get", { pane_id: paneId }, options);
+    if (!isRecord(result) || !isRecord(result.pane) || typeof result.pane.pane_id !== "string") {
+      throw new Error("herdr pane.get returned no pane");
+    }
+    return result.pane as PaneInfo;
   }
 
   async processInfo(paneId: string, options?: RequestOptions): Promise<PaneProcessInfo> {

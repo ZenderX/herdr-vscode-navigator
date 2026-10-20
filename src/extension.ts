@@ -32,7 +32,7 @@ import { createFollowConsent } from "./vscode/followConsent";
 import type { FollowConsent } from "./vscode/followConsent";
 import { createHerdrConnection } from "./vscode/herdrConnection";
 import type { HerdrConnection } from "./vscode/herdrConnection";
-import { HostingMonitor, detectHosting } from "./vscode/hostingMonitor";
+import { HostingMonitor, createCommandStartTrigger, detectHosting } from "./vscode/hostingMonitor";
 import { selectAnchor } from "./vscode/anchorPath";
 import type { AnchorChoice } from "./vscode/anchorPath";
 import { affectsSettings, readSettings, setAutoFollow } from "./vscode/settings";
@@ -218,7 +218,7 @@ interface ControllerEnv {
 function createController(env: ControllerEnv): FollowController {
   const { context, platform, log, consent } = env;
   const settings = env.settings();
-  const probeDeps = nodeProbeDeps();
+  const probeDeps = nodeProbeDeps(log);
   const liveProbe = createLiveCwdProbe({ processInfo: (paneId) => env.newClient().processInfo(paneId) }, probeDeps);
   // globalState is shared: drop the intent only if it is the one this rejected plan wrote.
   const clearPendingTarget = async (target: string | undefined): Promise<void> => {
@@ -392,7 +392,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const newClient = (pipeName = socketName()): HerdrClient => new HerdrClient({ pipeName, log });
   const warnAutoLaunch = (err: unknown): void => log("warn", `auto-launch: ${errorText(err)}`);
 
-  // Every hosting result is published here; lazy checks are rate-limited (5 s while not hosting, 30 s to re-verify).
+  // Every hosting result is published here; lazy checks reuse a result for 30 s (yes/no) or 5 s (unknown); terminal events and command starts force a scan.
   const hostingMonitor = new HostingMonitor<vscode.Terminal>({
     terminals: () => vscode.window.terminals,
     scan: (terminals) => detectHosting(terminals, platform, log),
@@ -458,6 +458,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const poller = new CwdPoller({
     platform,
     fetchSnapshot: () => newClient().snapshot(),
+    fetchPane: (paneId) => newClient().pane(paneId),
     getCwdSource: () => settings.cwdSource,
     isBusy: () => controller.getState().busy,
     isActive: () => connection.isConnected() && controller.getState().autoFollow && consent.autoAllowed(),
@@ -507,8 +508,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     log,
   });
 
+  // A command may start herdr in a window that is not hosting it yet; look again shortly after.
+  const commandStart = createCommandStartTrigger({
+    isHosting: () => host.get() === "yes",
+    scan: () => void requestHosting(true),
+    setTimer: timers.setTimeout,
+    clearTimer: timers.clearTimeout,
+  });
+
   // Disposal runs in push order, so the output channel goes last and teardown can still log.
   context.subscriptions.push(
+    { dispose: commandStart.cancel },
+    vscode.window.onDidStartTerminalShellExecution(commandStart.onCommandStart),
     statusBar,
     { dispose: connection.stop },
     { dispose: () => poller.stop() },

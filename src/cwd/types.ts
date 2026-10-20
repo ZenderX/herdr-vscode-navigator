@@ -1,3 +1,5 @@
+import type { Logger } from "../herdr/types";
+
 export type CwdOrigin = "probe" | "foreground_cwd" | "cwd";
 
 export type ProbeResult = { ok: true; path: string } | { ok: false; reason: string };
@@ -16,6 +18,8 @@ export interface ProbeDeps {
   execFile(file: string, args: readonly string[], timeoutMs: number): Promise<{ stdout: string }>;
   exists(path: string): boolean;
   isDirectory(path: string): Promise<boolean>;
+  /** Receives the one-time note when a system tool is not at its absolute path. */
+  log?: Logger;
   /** Milliseconds clock for memo expiry; defaults to Date.now. */
   now?(): number;
 }

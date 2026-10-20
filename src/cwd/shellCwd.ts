@@ -1,4 +1,6 @@
 import { normalizeCwd } from "../paths";
+import { createToolResolver } from "../toolPaths";
+import type { Tool } from "../toolPaths";
 import { findGitBash } from "./gitBash";
 import type { ProbeDeps, ProbeResult } from "./types";
 
@@ -63,7 +65,13 @@ const NOT_MSYS_TTL_MS = 30_000;
 // execFile marks a timed-out child as killed.
 const timedOut = (error: unknown): boolean => typeof error === "object" && error !== null && "killed" in error && error.killed === true;
 
-async function probeWindows(pid: number, gitBashPath: string, deps: ProbeDeps, memo: WindowsMemo): Promise<ProbeResult> {
+async function probeWindows(
+  pid: number,
+  gitBashPath: string,
+  deps: ProbeDeps,
+  memo: WindowsMemo,
+  resolveTool: (tool: Tool) => string,
+): Promise<ProbeResult> {
   if (memo.bashSetting !== gitBashPath) {
     memo.bashPath = findGitBash(gitBashPath, deps);
     memo.bashSetting = gitBashPath;
@@ -109,7 +117,7 @@ async function probeWindows(pid: number, gitBashPath: string, deps: ProbeDeps, m
   let descendants: string[];
   try {
     const { stdout } = await deps.execFile(
-      "powershell.exe",
+      resolveTool("powershell"),
       ["-NoProfile", "-NonInteractive", "-Command", CHILDREN_SCRIPT, String(pid)],
       POWERSHELL_TIMEOUT_MS,
     );
@@ -132,6 +140,7 @@ async function probeWindows(pid: number, gitBashPath: string, deps: ProbeDeps, m
 /** Returns a probe of a shell pid's live cwd for the injected platform; the probe never throws. */
 export function createShellCwdProbe(deps: ProbeDeps): (pid: number, gitBashPath: string) => Promise<ProbeResult> {
   const memo: WindowsMemo = { winpids: new Map(), notMsys: new Map() };
+  const resolveTool = createToolResolver(deps);
 
   return async (pid, gitBashPath) => {
     if (!Number.isInteger(pid) || pid <= 0) return fail(`invalid shell pid: ${pid}`);
@@ -140,11 +149,11 @@ export function createShellCwdProbe(deps: ProbeDeps): (pid: number, gitBashPath:
         case "linux":
           return await accept(await deps.readlink(`/proc/${pid}/cwd`), deps);
         case "darwin": {
-          const { stdout } = await deps.execFile("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], LSOF_TIMEOUT_MS);
+          const { stdout } = await deps.execFile(resolveTool("lsof"), ["-a", "-p", String(pid), "-d", "cwd", "-Fn"], LSOF_TIMEOUT_MS);
           return await accept(parseLsofCwd(stdout), deps);
         }
         case "win32":
-          return await probeWindows(pid, gitBashPath, deps, memo);
+          return await probeWindows(pid, gitBashPath, deps, memo, resolveTool);
         default:
           return fail(`unsupported platform: ${deps.platform}`);
       }

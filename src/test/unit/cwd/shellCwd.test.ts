@@ -146,6 +146,38 @@ describe("createShellCwdProbe", () => {
     assert.deepEqual(calls[2].args.slice(2), ["_", "7692", "8000"]);
   });
 
+  it("win32 and darwin: invoke powershell and lsof by absolute system path", async () => {
+    const ps = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe";
+    const winCalls: Call[] = [];
+    const win = createShellCwdProbe(
+      makeDeps({
+        calls: winCalls,
+        exists: (path) => path === BASH || path === ps,
+        execFile: (file, args) => {
+          winCalls.push({ file, args });
+          if (file === ps) return Promise.resolve({ stdout: "7692\r\n" });
+          return args.includes("500") ? Promise.reject(exitError(1)) : Promise.resolve({ stdout: "C:\\live\\dir\n" });
+        },
+      }),
+    );
+    assert.equal((await win(500, "")).ok, true);
+    assert.ok(winCalls.some(({ file }) => file === ps));
+
+    const macCalls: Call[] = [];
+    const mac = createShellCwdProbe(
+      makeDeps({
+        platform: "darwin",
+        exists: (path) => path === "/usr/sbin/lsof",
+        execFile: (file, args) => {
+          macCalls.push({ file, args });
+          return Promise.resolve({ stdout: "p9\nfcwd\nn/Users/me/proj\n" });
+        },
+      }),
+    );
+    await mac(9, "");
+    assert.equal(macCalls[0].file, "/usr/sbin/lsof");
+  });
+
   it("win32: a native shell with no MSYS descendants reports 'not an MSYS process'", async () => {
     const probe = createShellCwdProbe(
       makeDeps({

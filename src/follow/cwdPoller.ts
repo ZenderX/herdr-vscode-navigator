@@ -1,4 +1,4 @@
-import type { Logger, SessionSnapshot } from "../herdr";
+import type { Logger, PaneInfo, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
 import { normalizeCwd, samePath } from "../paths";
 import { realClock } from "./controller";
@@ -14,6 +14,8 @@ export const POLL_EVENTS: ReadonlySet<string> = new Set(["pane_updated", "worksp
 export interface CwdPollerOptions {
   platform: NodeJS.Platform;
   fetchSnapshot: () => Promise<SessionSnapshot>;
+  /** One pane by id (`pane.get`); rejects when the pane is gone. */
+  fetchPane: (paneId: string) => Promise<PaneInfo>;
   /** The field the follow reads, so the poll compares what the follow would use. */
   getCwdSource: () => CwdSource;
   /** True while a follow cycle runs; the tick is skipped. */
@@ -40,6 +42,8 @@ export class CwdPoller {
   private polling = false;
   private timer: unknown = null;
   private baseline: Baseline | null = null;
+  // Learnt from observe() and the snapshot fallback; lets a tick ask for one pane instead of the whole session.
+  private focusedPaneId: string | null = null;
   private trailing = false;
   private lastPollStart = Number.NEGATIVE_INFINITY;
   // Bumped by observe(): a poll that started before it holds a staler reading than the baseline it set.
@@ -67,6 +71,7 @@ export class CwdPoller {
   stop(): void {
     this.running = false;
     this.baseline = null;
+    this.focusedPaneId = null;
     this.trailing = false;
     this.cancelTimer();
   }
@@ -85,12 +90,12 @@ export class CwdPoller {
   observe(snapshot: SessionSnapshot): void {
     if (!this.running) return;
     this.generation += 1;
-    this.baseline = this.reading(snapshot) ?? this.baseline;
+    const pane = findFocusedPane(snapshot);
+    this.focusedPaneId = pane?.pane_id ?? null;
+    this.baseline = (pane && this.reading(pane)) ?? this.baseline;
   }
 
-  private reading(snapshot: SessionSnapshot): Baseline | null {
-    const pane = findFocusedPane(snapshot);
-    if (!pane) return null;
+  private reading(pane: PaneInfo): Baseline | null {
     const cwd = normalizeCwd(pickCwd(pane, this.options.getCwdSource()), this.options.platform);
     return cwd === null ? null : { paneId: pane.pane_id, cwd };
   }
@@ -129,6 +134,21 @@ export class CwdPoller {
     else this.timer = this.clock.setTimeout(() => void this.tick(), MIN_POLL_MS);
   }
 
+  /** The known focused pane via pane.get; the snapshot only when the id is unknown or the pane is gone or no longer focused. */
+  private async focusedPane(): Promise<PaneInfo | undefined> {
+    const { fetchPane, fetchSnapshot, log } = this.options;
+    const id = this.focusedPaneId;
+    if (id !== null) {
+      try {
+        const pane = await fetchPane(id);
+        if (pane.focused !== false) return pane;
+      } catch (err: unknown) {
+        log?.("debug", `pane.get ${id} failed, using snapshot: ${errorText(err)}`);
+      }
+    }
+    return findFocusedPane(await fetchSnapshot());
+  }
+
   private async poll(): Promise<void> {
     const { platform, log } = this.options;
     this.polling = true;
@@ -136,8 +156,11 @@ export class CwdPoller {
     this.lastPollStart = this.now();
     const generation = this.generation;
     try {
-      const current = this.reading(await this.options.fetchSnapshot());
-      if (!this.running || !current || generation !== this.generation) return;
+      const pane = await this.focusedPane();
+      if (!this.running || generation !== this.generation) return;
+      this.focusedPaneId = pane?.pane_id ?? null;
+      const current = pane && this.reading(pane);
+      if (!current) return;
       const previous = this.baseline;
       this.baseline = current;
       // A different pane is a focus change: focus events already follow it.

@@ -6,6 +6,43 @@ import { errorText } from "../log";
 /** Scans per request before coverage is given up on and `unknown` is published. */
 const MAX_SCANS = 3;
 
+/** How long a covering yes/no result answers lazy requests: re-verify when hosting, fallback rescan when not. */
+const RECHECK_MS = 30_000;
+
+/** A covering undetermined (`unknown`) result, from a failed detection or a hidden Git Bash link, is retried sooner. */
+const RECHECK_UNKNOWN_MS = 5_000;
+
+/** Lets a herdr client started by a command appear in the process table before the scan. */
+export const COMMAND_START_SETTLE_MS = 1_000;
+
+interface CommandStartDeps {
+  isHosting: () => boolean;
+  scan: () => void;
+  setTimer: (fn: () => void, ms: number) => unknown;
+  clearTimer: (timer: unknown) => void;
+}
+
+/** Returns the command-start handler: one forced scan per burst, none while hosting. */
+export function createCommandStartTrigger({ isHosting, scan, setTimer, clearTimer }: CommandStartDeps): { onCommandStart: () => void; cancel: () => void } {
+  let pending: unknown;
+  let armed = false;
+  return {
+    onCommandStart: () => {
+      if (isHosting() || armed) return;
+      armed = true;
+      pending = setTimer(() => {
+        armed = false;
+        if (!isHosting()) scan();
+      }, COMMAND_START_SETTLE_MS);
+    },
+    cancel: () => {
+      if (!armed) return;
+      armed = false;
+      clearTimer(pending);
+    },
+  };
+}
+
 /** One finished scan, immutable: what it saw is captured when it starts. */
 export interface HostingResult<T> {
   seq: number;
@@ -42,11 +79,11 @@ export class HostingMonitor<T> {
     this.subscribers.length = 0;
   }
 
-  /** Cached while fresh (5 s unless hosting, then 30 s); `force` skips the cache but still joins a request in progress. */
+  /** Cached while fresh (30 s after yes/no, 5 s after an undetermined (`unknown`) result); `force` skips the cache but still joins a request in progress. */
   request(force = false): Promise<HostingResult<T>> {
     if (this.inflight) return this.inflight;
     const { last } = this;
-    if (!force && last && this.covers(last.result) && this.deps.now() - last.at < (last.result.state === "yes" ? 30_000 : 5_000)) {
+    if (!force && last && this.covers(last.result) && this.deps.now() - last.at < (last.result.state === "unknown" ? RECHECK_UNKNOWN_MS : RECHECK_MS)) {
       return Promise.resolve(last.result);
     }
     this.inflight = this.run().finally(() => {
@@ -98,7 +135,7 @@ export async function detectHosting(
       await Promise.all(terminals.map((t) => withTimeout(t.processId, 2_000)))
     ).filter((pid): pid is number => pid !== undefined);
     if (shellPids.length === 0) return { state: "no", clientPids: [] };
-    const { table, msysEdges } = await readProcessTable(platform);
+    const { table, msysEdges } = await readProcessTable(platform, log);
     return analyzeHosting(table, shellPids, msysEdges);
   } catch (err: unknown) {
     log("warn", `hosting detection failed: ${errorText(err)}`);
