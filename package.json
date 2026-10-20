@@ -3,7 +3,7 @@
   "displayName": "Herdr Navigator",
   "icon": "images/icon.png",
   "description": "Switches the VS Code workspace folder to the working directory of the focused herdr pane.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "z3nder",
   "license": "MIT",
   "repository": {
