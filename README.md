@@ -39,6 +39,10 @@ Only the window that hosts herdr follows automatically. "Herdr: Follow Focused P
 
 The status bar item shows the followed folder. Click it to toggle auto-follow.
 
+## Restoring pane folders
+
+herdr 0.9.5 restores panes in the folder they were spawned in, not the one they were in when it stopped. While the window hosts herdr, the extension records each pane's folder. When auto-launch finds herdr stopped, it fixes herdr's `session.json` first, keeping a backup. After stopping herdr yourself, run "Herdr Navigator: Repair herdr session folders" before starting it again. Turn this off with `herdrNavigator.repairSessionOnLaunch`. Named sessions and `HERDR_CONFIG_PATH` are skipped.
+
 ## Commands
 
 | Command | Title | Key |
@@ -47,6 +51,7 @@ The status bar item shows the followed folder. Click it to toggle auto-follow.
 | `herdrNavigator.toggleAutoFollow` | Herdr: Toggle Auto-Follow | none |
 | `herdrNavigator.reconnect` | Herdr: Reconnect | none |
 | `herdrNavigator.showDiagnostics` | Herdr Navigator: Show Diagnostics | none |
+| `herdrNavigator.repairSessionFolders` | Herdr Navigator: Repair herdr session folders | none |
 
 The key binding is a chord because VS Code handles chords even while the herdr terminal has focus. A single key would go to the shell.
 
@@ -58,6 +63,7 @@ The key binding is a chord because VS Code handles chords even while the herdr t
 | `herdrNavigator.followMode` | `workspace` | `workspace` or `folder`, as described above. |
 | `herdrNavigator.followGitRoot` | `true` | Follow the Git repository root instead of the exact directory. |
 | `herdrNavigator.autoLaunch` | `true` | Relaunch herdr when VS Code restores a navigator window in which herdr was running. |
+| `herdrNavigator.repairSessionOnLaunch` | `true` | Fix pane folders in herdr's session file before auto-launch starts herdr. |
 | `herdrNavigator.cwdSource` | `auto` | Which pane directory to follow: `auto`, `pane` or `foreground`. |
 | `herdrNavigator.liveCwdProbe` | `true` | Read the live directory of the pane's shell process. |
 | `herdrNavigator.cwdPollMs` | `1000` | Milliseconds between checks for a `cd`. Values from 1 to 249 are raised to 250. `0` disables the check. |

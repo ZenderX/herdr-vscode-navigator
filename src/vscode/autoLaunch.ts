@@ -50,6 +50,10 @@ export interface AutoLaunchDeps {
   createTerminal: (options: { name: string; location: TerminalLocation; cwd?: string }) => AutoLaunchTerminal;
   editorLocation: TerminalLocation;
   resolveHerdr: () => Promise<string | undefined>;
+  /** Whether herdr's session folders are repaired just before herdr is typed. */
+  repairOnLaunch: () => boolean;
+  /** Repairs herdr's session file; never rejects the launch, and is awaited so the write completes first. */
+  repairSession: () => Promise<void>;
   /** Forces a hosting scan that ends in onHosting. */
   rescan: () => Promise<void>;
   /** Asks for a hosting result without forcing a scan; a fresh cached one is reused. */
@@ -388,6 +392,13 @@ export class AutoLaunch {
     if (pendingTakeoverFolder !== undefined && deps.isNavigator()) await this.apply({ type: "takeoverConsumed" });
     if (plan.action === "none") return;
 
+    if (deps.repairOnLaunch()) {
+      try {
+        await deps.repairSession();
+      } catch (err: unknown) {
+        deps.log("warn", `auto-launch: session repair failed: ${errorText(err)}`);
+      }
+    }
     if (plan.action === "reuse") {
       const terminal = terminals[plan.terminalIndex];
       if (!terminal) return;

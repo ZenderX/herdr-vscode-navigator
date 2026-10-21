@@ -56,6 +56,10 @@
       {
         "command": "herdrNavigator.showDiagnostics",
         "title": "Herdr Navigator: Show Diagnostics"
+      },
+      {
+        "command": "herdrNavigator.repairSessionFolders",
+        "title": "Herdr Navigator: Repair herdr session folders"
       }
     ],
     "keybindings": [
@@ -135,6 +139,12 @@
           "default": true,
           "scope": "window",
           "description": "Relaunch herdr in an editor-area terminal when VS Code restores a navigator window in which herdr was running."
+        },
+        "herdrNavigator.repairSessionOnLaunch": {
+          "type": "boolean",
+          "default": true,
+          "scope": "window",
+          "description": "Before auto-launch starts herdr, and only while the herdr server is not running, rewrite the pane and workspace folders in herdr's session.json to the folders the panes were last seen in (a backup is kept in the extension's storage)."
         },
         "herdrNavigator.gitBashPath": {
           "type": "string",

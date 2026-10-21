@@ -58,6 +58,23 @@ Paste back these output channel lines:
 - `window title:` lines.
 - Whether herdr restored its own session or started fresh.
 
+## Session folder repair (isolated)
+
+Steps 1 to 3 run against a scratch herdr session, never your live one. `scripts/session-restore-probe/repair-e2e.mjs` automates it.
+
+Warnings:
+
+- Pass `--session <scratch-name>` on every herdr command, including the stop command: `herdr session stop <scratch-name>`. A bare `herdr server stop` stops the live server.
+- The `HERDR_SESSION` environment variable does not isolate herdr's `workspace`, `pane` and `api` CLI commands; they hit the live session unless `--session` is passed.
+- The extension skips named sessions, so this procedure checks herdr's restore behaviour and the file edit, not the extension's own trigger.
+
+1. Start the scratch session: `herdr --session scratch` in a terminal. Create a workspace, `cd C:\Users\me\proj` (or `/home/me/proj`) in its pane.
+2. Stop it: `herdr session stop scratch`. When done, clean up with `herdr session delete scratch`.
+3. Start it again with `herdr --session scratch`.
+   Expected (the bug): the pane is back in the folder it was spawned in, not `proj`.
+4. This step runs on the default session and stops your real herdr server; only do it when nothing in it needs to survive. For the extension itself, use a normal window with a disposable workspace: let the navigator host herdr, `cd` in a pane, stop herdr, then run "Herdr Navigator: Repair herdr session folders" and relaunch.
+   Expected: the pane restores in the folder you `cd`'d to; the output channel lists the changes; a backup exists in the extension's global storage (newest five kept). Setting `herdrNavigator.repairSessionOnLaunch` to `false` and repeating restores herdr's own behaviour.
+
 ## Saved navigator workspace and the jump list
 
 `scripts/jump-list-repro/run.ps1` runs scenarios A to D in an isolated VS Code (see its README); these are the manual equivalents. Needs herdr on PATH and the installed VSIX in a normal window, not F5. The navigator workspace is `navigator.code-workspace` in the extension's global storage, in the `anchor` folder.

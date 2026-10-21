@@ -75,6 +75,25 @@ Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no li
 - Response: success result type not isolated in the schema (likely `workspace_info`); the client ignores the payload and rejects on an error envelope.
 - Ids such as `w4` are not stable across a herdr restore, so the extension stores the workspace `label` and maps it to an id from `session.snapshot` before focusing.
 
+## session.json (schema version 3)
+
+herdr persists its layout in `session.json` and, in 0.9.5, restores each pane in its spawn `cwd`, not its live one. The extension reads it while herdr runs and rewrites it only while the server is stopped (`src/restore/`).
+
+Location (default session only): `%APPDATA%\herdr\session.json` on Windows, `$XDG_CONFIG_HOME/herdr/session.json` or `~/.config/herdr/session.json` elsewhere. `HERDR_SESSION` and `HERDR_CONFIG_PATH` are unsupported and skipped. herdr keeps its own copies under `session-snapshots/` and `session-backups/` (see https://herdr.dev/docs/session-state/); the extension adds its own backup in its global storage.
+
+Fields read (everything else is preserved untouched, so the rewrite round-trips what herdr wrote):
+
+- `version`: must be `3`, otherwise the file is left alone.
+- `workspaces[].id`, `workspaces[].identity_cwd`, `workspaces[].tabs[].panes`: a map keyed by internal pane id, each pane with `cwd` (the spawn folder) and optionally `agent_session.value`.
+- `workspaces[].public_pane_numbers`: internal pane id to the public number used in live ids.
+- `workspaces[].worktree_space`: validated as an object only; never written.
+
+Fields written: pane `cwd` and workspace `identity_cwd`, in the surface form of the old value (slash style, trailing separator), e.g. `C:\Users\me\proj\`.
+
+Pane join rule: a live pane `w<N>:p<K>` from `session.snapshot` joins the persisted pane in workspace `w<N>` whose `public_pane_numbers` entry equals `K`. Live ids are not the internal ids, so the number is the only link. Live panes with no match are skipped.
+
+Repair match rule: a persisted pane is rewritten only when the manifest has an entry with the same internal id and the same spawn `cwd`, and, when both sides carry an `agent_session.value`, those are equal. Any doubt (path mismatch, manifest older than 14 days, no matching workspace, nothing to change) leaves the file alone. `worktree_space` is not rewritten because herdr 0.9.5 does not re-derive it; a pane that moved into another repository keeps its old worktree grouping.
+
 ## Update events
 
 Capture 2026-10-17, herdr 0.9.5 (protocol 22), read-only: `node scripts/herdr-probe.mjs --listen <s> --types pane.updated,pane.created,workspace.created,workspace.updated,tab.created`. Two runs (20 s and 40 s) produced only the ack `{"id":"probe_sub","result":{"type":"subscription_started"}}`; no `pane_updated`, `pane_created`, `workspace_created`, `workspace_updated` or `tab_created` line was observed.

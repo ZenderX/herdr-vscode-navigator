@@ -44,7 +44,7 @@ export function resolveCwd(
 
 export interface LiveCwdProbe {
   /** Never rejects; concurrent calls for one pane share a single in-flight probe. */
-  probe(paneId: string, settings: ProbeSettings): Promise<ProbeResult>;
+  probe(paneId: string, settings: ProbeSettings, reuseWithinMs?: number): Promise<ProbeResult>;
 }
 
 export function createLiveCwdProbe(client: ShellPidSource, deps: ProbeDeps): LiveCwdProbe {
@@ -60,11 +60,21 @@ export function createLiveCwdProbe(client: ShellPidSource, deps: ProbeDeps): Liv
     }
   };
 
+  const finished = new Map<string, { at: number; result: ProbeResult }>();
+  const now = deps.now ?? Date.now;
+
   return {
-    probe(paneId, settings) {
+    probe(paneId, settings, reuseWithinMs) {
       const existing = inflight.get(paneId);
       if (existing) return existing;
-      const started = run(paneId, settings).finally(() => inflight.delete(paneId));
+      const last = finished.get(paneId);
+      if (reuseWithinMs !== undefined && last && now() - last.at <= reuseWithinMs) return Promise.resolve(last.result);
+      const started = run(paneId, settings)
+        .then((result) => {
+          finished.set(paneId, { at: now(), result });
+          return result;
+        })
+        .finally(() => inflight.delete(paneId));
       inflight.set(paneId, started);
       return started;
     },

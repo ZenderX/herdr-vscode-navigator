@@ -90,6 +90,11 @@ interface Harness {
   leaseOnDisk: NavigatorLease | undefined;
   converted: string[];
   migrated: number;
+  /** Start and end of each repair call, with how many commands the created terminal had received. */
+  repairs: string[];
+  setRepairOnLaunch: (value: boolean) => void;
+  /** Makes the next repair wait until the returned release is called. */
+  holdRepair: () => () => void;
 }
 
 function harness(
@@ -127,6 +132,8 @@ function harness(
   let enabled = true;
   let rescanState = options.rescanState ?? "no";
   let gate: Promise<void> | undefined;
+  let repairOnLaunch = true;
+  let repairGate: Promise<void> | undefined;
   const alive = new Set<number>();
   const h = { clock, store, logs, terminals, created, createdTerminal, focused, rescans, rechecks, snapshot, alive } as Harness;
   const deps: AutoLaunchDeps = {
@@ -142,6 +149,12 @@ function harness(
       return createdTerminal;
     },
     editorLocation: EDITOR,
+    repairOnLaunch: () => repairOnLaunch,
+    repairSession: async () => {
+      h.repairs.push(`start sent=${h.createdTerminal.sent.length}`);
+      await repairGate;
+      h.repairs.push(`end sent=${h.createdTerminal.sent.length}`);
+    },
     resolveHerdr: () => Promise.resolve("herdrPath" in options ? options.herdrPath : "C:\\bin\\herdr.exe"),
     rescan: async () => {
       rescans.push(rescanState);
@@ -163,6 +176,17 @@ function harness(
     migrateLegacy: () => Promise.resolve(void (h.migrated += 1)),
   };
   h.leaseOnDisk = options.lease;
+  h.repairs = [];
+  h.setRepairOnLaunch = (value) => {
+    repairOnLaunch = value;
+  };
+  h.holdRepair = () => {
+    let release = (): void => undefined;
+    repairGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return release;
+  };
   h.converted = [];
   h.migrated = 0;
   h.auto = new AutoLaunch(deps);
@@ -260,6 +284,51 @@ describe("AutoLaunch decision", () => {
       assert.deepEqual(h.createdTerminal.sent, [["herdr", true]]);
     });
   }
+
+  it("finishes the session repair before typing herdr", async () => {
+    const h = harness(record());
+    const release = h.holdRepair();
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    assert.deepEqual(h.repairs, ["start sent=0"]);
+    assert.deepEqual(h.createdTerminal.sent, []);
+    release();
+    await flush();
+    assert.deepEqual(h.repairs, ["start sent=0", "end sent=0"]);
+    assert.deepEqual(h.createdTerminal.sent, [["herdr", true]]);
+  });
+
+  it("types herdr into a reused tab only after the repair", async () => {
+    const revived = new FakeTerminal("herdr");
+    const h = harness(record(), { terminals: [revived] });
+    const release = h.holdRepair();
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    assert.deepEqual(revived.sent, []);
+    release();
+    await flush();
+    assert.deepEqual(revived.sent, [["herdr", true]]);
+  });
+
+  it("skips the session repair when repairSessionOnLaunch is off", async () => {
+    const h = harness(record());
+    h.setRepairOnLaunch(false);
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    assert.deepEqual(h.repairs, []);
+    assert.deepEqual(h.createdTerminal.sent, [["herdr", true]]);
+  });
+
+  it("does not repair when no launch happens", async () => {
+    const h = harness(record(), { herdrPath: undefined });
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    assert.deepEqual(h.repairs, []);
+  });
 
   it("logs that hosting was unknown when the first sweep could not tell", async () => {
     const h = harness(record());

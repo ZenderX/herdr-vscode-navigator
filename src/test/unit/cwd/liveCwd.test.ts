@@ -79,6 +79,25 @@ describe("createLiveCwdProbe", () => {
     assert.equal(infoCalls, 2, "no cache beyond the in-flight promise");
   });
 
+  it("lets a second caller reuse a result finished within its window, so one cycle spawns one probe", async () => {
+    let infoCalls = 0;
+    let clock = 1_000;
+    const client = {
+      processInfo: () => {
+        infoCalls += 1;
+        return Promise.resolve({ shell_pid: 11 });
+      },
+    };
+    const live = createLiveCwdProbe(client, { ...deps(() => Promise.resolve("/work")), now: () => clock });
+    await live.probe("w1:p1", settings);
+    clock += 1_000;
+    assert.deepEqual(await live.probe("w1:p1", settings, 3_000), { ok: true, path: "/work" });
+    assert.equal(infoCalls, 1, "reused within the window");
+    clock += 3_000;
+    await live.probe("w1:p1", settings, 3_000);
+    assert.equal(infoCalls, 2, "probes again once the result is older than the window");
+  });
+
   it("reports a pane.process_info failure as a reason instead of throwing", async () => {
     const live = createLiveCwdProbe({ processInfo: () => Promise.reject(new Error("pipe gone")) }, deps(() => Promise.resolve("/x")));
     const result = await live.probe("w1:p1", settings);
