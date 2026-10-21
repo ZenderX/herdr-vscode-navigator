@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.1.3 — 2026-10-21
 
 - Session folder repair: herdr 0.9.5 restores panes in the folder they were spawned in, not the one they were in when it stopped. While this window hosts herdr, the extension records each pane's live folder; when auto-launch finds the herdr server stopped, it fixes pane `cwd` and workspace `identity_cwd` in herdr's `session.json` before starting herdr. It saves a backup first (newest five kept, under the extension's global storage) and leaves the file alone if the schema version is not 3 or anything does not match. Named sessions (`HERDR_SESSION`) and `HERDR_CONFIG_PATH` are skipped. A pane that moved into another repository keeps its old worktree grouping.
 - New command `herdrNavigator.repairSessionFolders` (Herdr Navigator: Repair herdr session folders), for after a manual stop of herdr and before relaunching it.
