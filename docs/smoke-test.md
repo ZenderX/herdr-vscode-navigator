@@ -34,7 +34,9 @@ Manual procedure. Needs herdr 0.9.5 and two directories, `A` and `B`, that you c
 Install the packaged VSIX and run it in a normal window; never press F5 for these checks (no debug sessions).
 
 1. Convert a window to a navigator window (steps 1 to 3 above).
-   Expected: the title bar shows `herdr-navigation (Workspace)`, and the output channel has `window title: wrote ...`.
+   Expected: with the herdr terminal tab active, the title bar shows `herdr - <focused space label> - Visual Studio Code` (the workspace name is the space label, no `(Workspace)`), and the output channel has `window title: wrote ...`.
+2. With `herdrNavigator.autoFollow` on, focus a second space in herdr.
+   Expected: the title bar changes to `herdr - <second space label> - Visual Studio Code` without a window reload. The Explorer header still reads `NAVIGATOR (WORKSPACE)`; that is a VS Code limit.
 
 ## Session restore
 

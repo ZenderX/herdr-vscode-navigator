@@ -49,7 +49,7 @@ import type { AnchorChoice } from "./vscode/anchorPath";
 import { affectsSettings, readSettings, setAutoFollow } from "./vscode/settings";
 import type { Settings } from "./vscode/settings";
 import { StatusBar } from "./vscode/statusBar";
-import { createWindowTitleSync } from "./vscode/windowTitle";
+import { createWindowTitleSync, focusedLabel } from "./vscode/windowTitle";
 import {
   convertToNavigatorWorkspace,
   describeWorkspace,
@@ -74,6 +74,7 @@ const PROBE_REUSE_MS = 3_000;
 const PENDING_KEY = "herdrNavigator.pending";
 const TRACKED_KEY = "herdrNavigator.tracked";
 const LAST_FOLLOWED_KEY = "herdrNavigator.lastFollowed";
+const TITLE_KEY = "herdrNavigator.windowTitle";
 
 const timers = { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as NodeJS.Timeout) };
 
@@ -207,10 +208,15 @@ function createRepairRunner(context: vscode.ExtensionContext, platform: NodeJS.P
     });
 }
 
-function createTitleRefresher(platform: NodeJS.Platform, log: Logger, isNavigatorWindow: () => boolean): () => void {
+function createTitleRefresher(context: vscode.ExtensionContext, platform: NodeJS.Platform, log: Logger, isNavigatorWindow: () => boolean): (label?: string) => void {
   const syncWindowTitle = createWindowTitleSync({
     platform,
     log,
+    recorded: {
+      get: () => context.workspaceState.get<string>(TITLE_KEY),
+      set: (value) => Promise.resolve(context.workspaceState.update(TITLE_KEY, value)),
+    },
+    initialLabel: () => readRecord(context.globalState.get<unknown>(SESSION_KEY)).lastSpaceLabel,
     config: () => {
       const windowConfig = vscode.workspace.getConfiguration("window");
       return {
@@ -219,8 +225,8 @@ function createTitleRefresher(platform: NodeJS.Platform, log: Logger, isNavigato
       };
     },
   });
-  return () => {
-    syncWindowTitle(isNavigatorWindow()).catch((err: unknown) => log("warn", `window title: ${errorText(err)}`));
+  return (label) => {
+    syncWindowTitle(isNavigatorWindow(), label).catch((err: unknown) => log("warn", `window title: ${errorText(err)}`));
   };
 }
 
@@ -520,7 +526,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return plain && settings.followMode === "workspace" ? "single-folder" : "other";
   };
   const windowFolder = (): string | undefined => getFolders()[isNavigatorWindow() ? 1 : 0]?.path;
-  const refreshWindowTitle = createTitleRefresher(platform, log, isNavigatorWindow);
+  const refreshWindowTitle = createTitleRefresher(context, platform, log, isNavigatorWindow);
   const socketName = (): string => resolvePipeName(settings.socketPath, process.env, platform);
   // A fresh client per call: the socket path setting can change at runtime.
   const newClient = (pipeName = socketName()): HerdrClient => new HerdrClient({ pipeName, log });
@@ -606,6 +612,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       poller.observe(snapshot);
       void record(recorder, snapshot);
       void autoLaunch.observeSnapshot(snapshot).catch(warnAutoLaunch);
+      refreshWindowTitle(focusedLabel(snapshot));
     },
   });
   // Herdr pushes no cwd-change event, so a poll of the focused pane's cwd detects a cd; focus events already cover pane switches.
