@@ -43,6 +43,10 @@ The status bar item shows the followed folder. Click it to toggle auto-follow.
 
 herdr 0.9.5 restores panes in the folder they were spawned in, not the one they were in when it stopped. While the window hosts herdr, the extension records each pane's folder. When auto-launch finds herdr stopped, it fixes herdr's `session.json` first, keeping a backup. After stopping herdr yourself, run "Herdr Navigator: Repair herdr session folders" before starting it again. Turn this off with `herdrNavigator.repairSessionOnLaunch`. Named sessions and `HERDR_CONFIG_PATH` are skipped.
 
+## Optional herdr plugin
+
+A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`.
+
 ## Commands
 
 | Command | Title | Key |

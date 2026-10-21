@@ -1,0 +1,24 @@
+id = "zenderx.refocus-last-space"
+name = "Refocus Last Space"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Focuses the space you last used after herdr restarts, even after a crash or reboot."
+platforms = ["linux", "macos", "windows"]
+
+[[events]]
+on = "workspace.focused"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/record.sh"]
+
+[[events]]
+on = "workspace.focused"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/record.ps1"]
+
+[[startup]]
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/restore.sh"]
+
+[[startup]]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/restore.ps1"]

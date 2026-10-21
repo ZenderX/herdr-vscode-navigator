@@ -12,3 +12,4 @@ node_modules/**
 **/*.map
 bash.exe.stackdump
 private/**
+plugin/**
