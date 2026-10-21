@@ -1,0 +1,104 @@
+# Builds the VSIX from a pushed v* tag, attests its build provenance and attaches it
+# to a GitHub Release. The maintainer uploads that exact file to the Marketplace.
+# The build job runs npm code with a read-only token; the release job holds the write
+# and signing permissions and runs no npm code. See docs/verifying-releases.md.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+jobs:
+  build:
+    # Tags are also pushed to the private repo, where attestations are unavailable.
+    if: github.repository == 'ZenderX/herdr-vscode-navigator'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run lint
+
+      - run: npm test
+
+      - name: Check tag matches package.json version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$TAG" != "v$version" ]; then
+            echo "Tag $TAG does not match package.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Build VSIX
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          npx vsce package --no-dependencies
+          vsix="herdr-navigator-${TAG#v}.vsix"
+          test -f "$vsix"
+          sha256sum "$vsix" > "$vsix.sha256"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: vsix
+          path: |
+            herdr-navigator-*.vsix
+            herdr-navigator-*.vsix.sha256
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: github.repository == 'ZenderX/herdr-vscode-navigator'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vsix
+
+      - name: Check artifact matches checksum
+        run: sha256sum --check herdr-navigator-*.vsix.sha256
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: herdr-navigator-*.vsix
+
+      - name: Create GitHub Release
+        env:
+          TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VSIX="herdr-navigator-${TAG#v}.vsix"
+          notes=$(awk -v tag="$TAG" '
+            /^## / { if (found) exit; if (index($0, "## " tag " ") == 1 || $0 == "## " tag) found = 1; next }
+            found { print }
+          ' CHANGELOG.md)
+          if [ -z "$(echo "$notes" | tr -d '[:space:]')" ]; then
+            notes="Release $TAG. See CHANGELOG.md."
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$VSIX" "$VSIX.sha256" --clobber
+          else
+            gh release create "$TAG" "$VSIX" "$VSIX.sha256" --verify-tag --title "$TAG" --notes "$notes"
+          fi

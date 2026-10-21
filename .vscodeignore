@@ -4,6 +4,7 @@ scripts/**
 docs/**
 .vscode/**
 .claude/**
+.github/**
 tsconfig.json
 .gitignore
 Makefile

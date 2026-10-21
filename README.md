@@ -94,7 +94,7 @@ The extension talks only to the local herdr socket. It sends read-only requests,
 
 ## Release notes
 
-See the [changelog](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/CHANGELOG.md). Report problems on the [issue tracker](https://github.com/ZenderX/herdr-vscode-navigator/issues).
+See the [changelog](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/CHANGELOG.md). Report problems on the [issue tracker](https://github.com/ZenderX/herdr-vscode-navigator/issues). To check that a release matches its source, see [Verifying a release](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/verifying-releases.md).
 
 ## License
 

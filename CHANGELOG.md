@@ -4,6 +4,7 @@
 
 - The workspace name in the navigator's title bar now shows the focused herdr space's label instead of `herdr-navigation (Workspace)`, and follows the focused space without a reload while auto-follow is on (a space rename shows at the next focus change). With the herdr terminal tab active the title reads `herdr - <space> - Visual Studio Code`; `herdr` there is the active editor, not part of the extension's value. Titles written by 0.1.x are migrated on first run; a `window.title` you set yourself in the workspace is left alone.
 - Known limit: the Explorer header still reads `NAVIGATOR (WORKSPACE)`. VS Code derives it from the saved workspace file name plus a hardcoded suffix and offers no API to change it; renaming the file to follow the space would reload the window on every space switch.
+- Releases are now built by a GitHub Actions workflow with a signed build provenance attestation. See [Verifying a release](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/verifying-releases.md).
 
 ## v0.1.3 — 2026-10-21
 
