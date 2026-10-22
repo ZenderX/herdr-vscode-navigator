@@ -15,6 +15,8 @@ export interface PlanInput {
   herdrPath: string | undefined;
   terminals: ReadonlyArray<{ name: string; isInteractedWith: boolean }>;
   terminalName: "herdr";
+  /** An explicit user launch: skips the enabled, navigator and was-running rules. */
+  explicit?: boolean;
 }
 
 export type NoneReason = "disabled" | "not-navigator" | "not-restored" | "already-hosting" | "herdr-missing";
@@ -25,10 +27,12 @@ export type LaunchPlan =
   | { action: "create"; name: "herdr"; command: "herdr"; cwd?: string; focusLabel?: string; focusFolder?: string };
 
 export function planAutoLaunch(input: PlanInput): LaunchPlan {
-  const { platform, enabled, isNavigatorWindow, record, now, herdrHostingNow, herdrPath, terminals, terminalName } = input;
-  if (!enabled) return { action: "none", reason: "disabled" };
-  if (!isNavigatorWindow) return { action: "none", reason: "not-navigator" };
-  if (!record.herdrWasRunning) return { action: "none", reason: "not-restored" };
+  const { platform, enabled, isNavigatorWindow, record, now, herdrHostingNow, herdrPath, terminals, terminalName, explicit } = input;
+  if (!explicit) {
+    if (!enabled) return { action: "none", reason: "disabled" };
+    if (!isNavigatorWindow) return { action: "none", reason: "not-navigator" };
+    if (!record.herdrWasRunning) return { action: "none", reason: "not-restored" };
+  }
   if (herdrHostingNow) return { action: "none", reason: "already-hosting" };
   if (herdrPath === undefined) return { action: "none", reason: "herdr-missing" };
 

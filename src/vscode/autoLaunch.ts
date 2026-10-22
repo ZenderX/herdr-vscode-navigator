@@ -10,7 +10,7 @@ import { planAutoLaunch, planTakeover } from "../launch/planAutoLaunch";
 import type { LaunchPlan, WindowKind } from "../launch/planAutoLaunch";
 import { readRecord, reduce } from "../launch/sessionState";
 import type { SessionEvent, SessionRecord } from "../launch/sessionState";
-import { normalizeCwd, samePath } from "../paths";
+import { samePath } from "../paths";
 
 export const SESSION_KEY = "herdrNavigator.session";
 const TERMINAL_NAME = "herdr";
@@ -25,13 +25,22 @@ const MAX_RETRIES = 3;
 const LEASE_REFRESH_MS = 20_000;
 const RESTORE_POLL_MS = 1000;
 const RESTORE_GIVE_UP_MS = 15_000;
+// Safety net only: how long after creating its own terminal the extension still treats a same-named arrival as a late revival.
+const LATE_REVIVAL_MS = 60_000;
+// The hosting scan lags a fresh herdr start by about 3 s; within this window a terminal herdr was typed into counts as hosting it.
+const STARTING_GRACE_MS = 10_000;
+const HERDR_SHELL = /(^|[\\/])herdr(\.exe)?$/i;
 
 /** The slice of vscode.Terminal this module touches. */
 export interface AutoLaunchTerminal {
   name: string;
   state: { isInteractedWith: boolean };
+  /** Revived terminals rebuild this from the launch config; only `shellPath` is read. */
+  creationOptions?: object;
+  processId?: PromiseLike<number | undefined>;
   show(): void;
   sendText(text: string, shouldExecute?: boolean): void;
+  dispose(): void;
 }
 
 export interface AutoLaunchClock {
@@ -59,6 +68,8 @@ export interface AutoLaunchDeps {
   repairSession: () => Promise<void>;
   /** Forces a hosting scan that ends in onHosting. */
   rescan: () => Promise<void>;
+  /** Scans only this terminal's process tree for a herdr client; `unknown` when that cannot be determined. Never rejects. */
+  terminalHostsHerdr: (terminal: AutoLaunchTerminal) => Promise<HostState>;
   /** Asks for a hosting result without forcing a scan; a fresh cached one is reused. */
   recheck: () => Promise<void>;
   /** Whether a process with this native pid still exists; defaults to a signal-0 probe. */
@@ -78,7 +89,7 @@ export interface AutoLaunchDeps {
   migrateLegacy: () => Promise<void>;
 }
 
-export type LaunchNowResult = "launched" | "running" | "busy" | "herdr-missing";
+export type LaunchNowResult = "launched" | "shown" | "running" | "busy" | "herdr-missing";
 
 /** How a terminal closed, as far as shutdown-versus-user attribution needs. */
 export type CloseKind = "shutdown" | "user" | "other";
@@ -97,6 +108,10 @@ export function sessionMemento(
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function runsHerdrBinary({ creationOptions }: AutoLaunchTerminal): boolean {
+  return creationOptions !== undefined && "shellPath" in creationOptions && typeof creationOptions.shellPath === "string" && HERDR_SHELL.test(creationOptions.shellPath);
 }
 
 function processExists(pid: number): boolean {
@@ -119,6 +134,11 @@ export class AutoLaunch {
   private decided = false;
   private restoring = false;
   private launching = false;
+  private started = false;
+  private deciding = false;
+  private created: { terminal: AutoLaunchTerminal; at: number } | undefined;
+  private earlyArrivals: AutoLaunchTerminal[] = [];
+  private typedInto:{ terminal: AutoLaunchTerminal; at: number } | undefined;
   private disposed = false;
   private shutdownSeen = false;
   private closeSinceSeen: CloseKind | "none" = "none";
@@ -138,6 +158,7 @@ export class AutoLaunch {
 
   /** Opens the settle window; revived terminals may arrive after activation. */
   start(): void {
+    this.started = true;
     this.startedAt = this.deps.clock.now();
     // First, so a plain-folder window starting in the same launch sees this navigator within its grace delay.
     this.writeLease();
@@ -159,12 +180,39 @@ export class AutoLaunch {
     await this.apply({ type: "takeoverPending", folder });
   }
 
-  onTerminalOpened({ name, state }: AutoLaunchTerminal): void {
-    if (this.decided) return;
+  onTerminalOpened(terminal: AutoLaunchTerminal): void {
+    const { name, state } = terminal;
+    if (this.decided) {
+      // While a launch is executing, the created terminal does not exist yet; reconcile once it does.
+      if (!this.created && (this.deciding || this.launching)) this.earlyArrivals.push(terminal);
+      else this.reconcileLate(terminal);
+      return;
+    }
     this.logSeen(name, state.isInteractedWith);
     // A hosting result from before this terminal appeared cannot speak for it.
     this.sweepDone = false;
     this.restartSettle();
+  }
+
+  // A revival can land after the settle window, once the extension has typed herdr into a tab of its own; the revived tab is then an empty twin.
+  private reconcileLate(terminal: AutoLaunchTerminal): void {
+    void this.reconcileLateAsync(terminal).catch((err: unknown) => this.deps.log("warn", `auto-launch: ${errorText(err)}`));
+  }
+
+  private async reconcileLateAsync(terminal: AutoLaunchTerminal): Promise<void> {
+    const { created } = this;
+    if (!created || terminal === created.terminal || terminal.name !== TERMINAL_NAME) return;
+    if (this.deps.clock.now() - created.at > LATE_REVIVAL_MS) return;
+    const interacted = terminal.state.isInteractedWith;
+    this.logSeen(terminal.name, interacted);
+    if (interacted || runsHerdrBinary(terminal)) return this.deps.log("info", "auto-launch: late herdr terminal may be in use; kept alongside the created one");
+    // A reloaded window can reconnect a pty whose herdr client still runs, so only the process tree proves the tab is an empty twin.
+    const hosting = await this.deps.terminalHostsHerdr(terminal);
+    if (hosting !== "no") return this.deps.log("info", `auto-launch: late herdr terminal hosting=${hosting}; kept alongside the created one`);
+    // The user may have typed into the tab while it was scanned.
+    if (this.disposed || terminal.state.isInteractedWith) return;
+    this.deps.log("info", "auto-launch: late revived herdr terminal never ran herdr; disposed");
+    terminal.dispose();
   }
 
   /** Classifies a terminal's exit reason, then behaves as onTerminalClosed. */
@@ -367,10 +415,14 @@ export class AutoLaunch {
   private async maybeDecide(): Promise<void> {
     if (this.decided || !this.settled || !this.sweepDone) return;
     this.decided = true;
+    this.deciding = true;
     try {
       await this.decide();
     } catch (err: unknown) {
       this.deps.log("error", `auto-launch: ${errorText(err)}`);
+    } finally {
+      this.deciding = false;
+      this.earlyArrivals = [];
     }
   }
 
@@ -380,7 +432,19 @@ export class AutoLaunch {
     if (deps.windowKind() === "navigator-untitled") return void deps.log("info", "auto-launch: none legacy-untitled");
     const herdrPath = await deps.resolveHerdr();
     const terminals = deps.terminals();
-    const plan = planAutoLaunch({
+    const plan = this.plan(herdrPath, terminals, false);
+    this.logPlan(plan);
+    // Only the navigator consumes a takeover, and whatever the plan was: a stale one must not steer a later launch.
+    const { pendingTakeoverFolder } = this.record;
+    if (pendingTakeoverFolder !== undefined && deps.isNavigator()) await this.apply({ type: "takeoverConsumed" });
+    if (plan.action === "none") return;
+    if (herdrPath === undefined) return;
+    await this.execute(plan, terminals, herdrPath);
+  }
+
+  private plan(herdrPath: string | undefined, terminals: readonly AutoLaunchTerminal[], explicit: boolean): LaunchPlan {
+    const { deps } = this;
+    return planAutoLaunch({
       platform: deps.platform,
       enabled: deps.enabled(),
       isNavigatorWindow: deps.isNavigator(),
@@ -391,34 +455,38 @@ export class AutoLaunch {
       herdrPath,
       terminals: terminals.map(({ name, state }) => ({ name, isInteractedWith: state.isInteractedWith })),
       terminalName: TERMINAL_NAME,
+      explicit,
     });
-    this.logPlan(plan);
-    // Only the navigator consumes a takeover, and whatever the plan was: a stale one must not steer a later launch.
-    const { pendingTakeoverFolder } = this.record;
-    if (pendingTakeoverFolder !== undefined && deps.isNavigator()) await this.apply({ type: "takeoverConsumed" });
-    if (plan.action === "none") return;
-    if (herdrPath === undefined) return;
-    await this.execute(plan, terminals, herdrPath);
   }
 
   /** An explicit launch (status-bar click): skips the auto-launch rules, needs only herdr on PATH. */
   async launchNow(): Promise<LaunchNowResult> {
     const { deps } = this;
-    if (this.launching) return "busy";
+    // Auto-launch owns the terminal until it has decided and finished executing; a click must not add a second one.
+    if (this.launching || this.deciding || (this.started && !this.decided)) return "busy";
     this.launching = true;
     try {
       await deps.rescan();
       // Undetectable hosting counts as hosting, as in auto-launch: a duplicate herdr is worse than a missed launch.
       if (this.lastState !== "no") return "running";
+      // The scan has not caught up with herdr typed into a tab moments ago; show that tab instead of starting a second herdr.
+      const typed = this.typedInto;
+      if (typed && deps.clock.now() - typed.at < STARTING_GRACE_MS && deps.terminals().includes(typed.terminal)) {
+        deps.log("info", "auto-launch: shown herdr terminal that is still starting");
+        typed.terminal.show();
+        return "shown";
+      }
       const herdrPath = await deps.resolveHerdr();
       if (herdrPath === undefined) return "herdr-missing";
-      const { lastFolder, lastSpaceLabel } = this.record;
-      const cwd = normalizeCwd(lastFolder, deps.platform) ?? undefined;
-      this.deps.log("info", `launch: create herdr cwd=${cwd ?? "none"} focus=${lastSpaceLabel ?? "none"}`);
-      await this.execute({ action: "create", name: "herdr", command: "herdr", cwd, focusLabel: lastSpaceLabel }, [], herdrPath);
+      const terminals = deps.terminals();
+      const plan = this.plan(herdrPath, terminals, true);
+      if (plan.action === "none") return "running";
+      this.logPlan(plan);
+      await this.execute(plan, terminals, herdrPath);
       return "launched";
     } finally {
       this.launching = false;
+      this.earlyArrivals = [];
     }
   }
 
@@ -438,6 +506,7 @@ export class AutoLaunch {
       if (!terminal) return;
       terminal.show();
       terminal.sendText(plan.command, true);
+      this.typedInto = { terminal, at: deps.clock.now() };
     } else {
       const terminal = deps.createTerminal({
         name: plan.name,
@@ -445,6 +514,11 @@ export class AutoLaunch {
         ...(plan.cwd === undefined ? {} : { cwd: plan.cwd }),
       });
       terminal.sendText(plan.command, true);
+      this.created = { terminal, at: deps.clock.now() };
+      this.typedInto = this.created;
+      const early = this.earlyArrivals;
+      this.earlyArrivals = [];
+      for (const arrival of early) this.reconcileLate(arrival);
     }
     // The plugin's startup hook re-focuses once the server starts; an already-running server keeps its live focus.
     if (pluginState !== undefined && (await pluginState) === "present") {

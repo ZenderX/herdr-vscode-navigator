@@ -38,6 +38,7 @@ import { ManifestRecorder, ManifestStore, parseManifest } from "./restore/record
 import { repairSessionFolders } from "./restore/repair";
 import type { RepairOutcome } from "./restore/repair";
 import { resolveSessionFilePath } from "./restore/sessionFile";
+import { withTimeout } from "./hosting";
 import { resolveAnchor } from "./vscode/anchor";
 import { AutoLaunch, SESSION_KEY, sessionMemento } from "./vscode/autoLaunch";
 import { createFollowConsent } from "./vscode/followConsent";
@@ -272,6 +273,15 @@ function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
     detectPlugin: (herdrPath) => detectRefocusPlugin(nodeProbeDeps().execFile, herdrPath),
     repairOnLaunch: () => vscode.workspace.getConfiguration("herdrNavigator").get<boolean>("repairSessionOnLaunch", true),
     repairSession: () => env.repair().then(() => undefined),
+    terminalHostsHerdr: async (terminal) => {
+      // detectHosting reads a terminal without a shell pid as "no", which proves nothing here.
+      try {
+        if (!terminal.processId || (await withTimeout(terminal.processId, 2_000)) === undefined) return "unknown";
+        return (await detectHosting([{ processId: terminal.processId }], env.platform, log)).state;
+      } catch {
+        return "unknown";
+      }
+    },
     rescan: () => env.requestHosting(true),
     recheck: () => env.requestHosting(),
     exitReasons: { shutdown: vscode.TerminalExitReason.Shutdown, user: vscode.TerminalExitReason.User },
@@ -477,8 +487,12 @@ function registerCommands(env: CommandsEnv): vscode.Disposable[] {
     vscode.commands.registerCommand("herdrNavigator.toggleAutoFollow", () => setAutoFollow(!controller.getState().autoFollow)),
     vscode.commands.registerCommand("herdrNavigator.launchHerdr", async () => {
       try {
-        if ((await autoLaunch.launchNow()) === "herdr-missing") {
+        const result = await autoLaunch.launchNow();
+        if (result === "herdr-missing") {
           void vscode.window.showErrorMessage("Herdr Navigator cannot find herdr on PATH.");
+        } else if (result === "busy") {
+          env.output.info("launch: click ignored while auto-launch is starting herdr");
+          vscode.window.setStatusBarMessage("herdr: starting…", 3000);
         }
       } catch (err: unknown) {
         void vscode.window.showErrorMessage(`Herdr Navigator could not launch herdr: ${errorText(err)}`);

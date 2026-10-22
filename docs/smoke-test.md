@@ -54,6 +54,8 @@ Needs herdr on PATH and `herdrNavigator.autoLaunch` on (default). Use the instal
    Expected: no herdr launch; the log has `auto-launch: none ...` with reason `not-restored`.
 4. Negative: set `herdrNavigator.autoLaunch` to `false`, repeat step 1 and 2.
    Expected: no herdr launch; the log has reason `disabled`.
+5. Restore without a duplicate. With a herdr editor tab open, close and reopen VS Code (ideally with the machine busy, or by running "Developer: Reload Window").
+   Expected: exactly one herdr tab, running herdr, and no empty extra tab. If a revived tab arrives late the log shows `auto-launch: late revived herdr terminal never ran herdr; disposed`.
 
 Paste back these output channel lines:
 

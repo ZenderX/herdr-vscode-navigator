@@ -50,12 +50,17 @@ class FakeClock {
 class FakeTerminal implements AutoLaunchTerminal {
   shown = 0;
   sent: Array<[string, boolean | undefined]> = [];
+  disposed = false;
   state: { isInteractedWith: boolean };
   constructor(
     public name: string,
     interacted = false,
+    public creationOptions?: object,
   ) {
     this.state = { isInteractedWith: interacted };
+  }
+  dispose(): void {
+    this.disposed = true;
   }
   show(): void {
     this.shown++;
@@ -77,6 +82,7 @@ interface Harness {
   terminals: FakeTerminal[];
   created: Array<{ name: string; location: TerminalLocation; cwd?: string }>;
   createdTerminal: FakeTerminal;
+  madeTerminals: FakeTerminal[];
   focused: string[];
   rescans: HostState[];
   /** Non-forced (cache-allowed) hosting requests. */
@@ -98,6 +104,8 @@ interface Harness {
   setRepairOnLaunch: (value: boolean) => void;
   /** Makes the next repair wait until the returned release is called. */
   holdRepair: () => () => void;
+  /** What the per-terminal process-tree scan reports; "no" when absent. */
+  terminalHosting: Map<AutoLaunchTerminal, HostState>;
 }
 
 function harness(
@@ -110,6 +118,8 @@ function harness(
     kind?: WindowKind;
     folder?: string;
     lease?: NavigatorLease;
+    /** createTerminal returns a new terminal per call, recorded in `madeTerminals`. */
+    distinctTerminals?: boolean;
   } = {},
 ): Harness {
   const clock = new FakeClock();
@@ -150,7 +160,11 @@ function harness(
     terminals: () => terminals,
     createTerminal: (o) => {
       created.push(o);
-      return createdTerminal;
+      if (!options.distinctTerminals) return createdTerminal;
+      const terminal = new FakeTerminal(o.name);
+      h.madeTerminals.push(terminal);
+      terminals.push(terminal);
+      return terminal;
     },
     editorLocation: EDITOR,
     repairOnLaunch: () => repairOnLaunch,
@@ -164,6 +178,7 @@ function harness(
       h.pluginCalls += 1;
       return Promise.resolve(pluginState);
     },
+    terminalHostsHerdr: (terminal) => Promise.resolve(h.terminalHosting.get(terminal) ?? "no"),
     rescan: async () => {
       rescans.push(rescanState);
       await gate;
@@ -185,6 +200,8 @@ function harness(
   };
   h.leaseOnDisk = options.lease;
   h.repairs = [];
+  h.madeTerminals = [];
+  h.terminalHosting = new Map();
   h.setRepairOnLaunch = (value) => {
     repairOnLaunch = value;
   };
@@ -279,6 +296,130 @@ describe("AutoLaunch decision", () => {
     assert.equal(h.created.length, 0);
     assert.equal(revived.shown, 1);
     assert.deepEqual(revived.sent, [["herdr", true]]);
+  });
+
+  describe("a revived herdr terminal arriving after the extension created its own", () => {
+    async function createdHarness(): Promise<Harness> {
+      const h = harness(record());
+      h.auto.start();
+      await h.auto.onHosting("no");
+      await h.clock.advance(1600);
+      assert.equal(h.created.length, 1);
+      return h;
+    }
+
+    it("disposes the empty revived tab and keeps the one that ran herdr", async () => {
+      const h = await createdHarness();
+      const revived = new FakeTerminal("herdr", false, { name: "herdr" });
+      h.auto.onTerminalOpened(revived);
+      await flush();
+      assert.equal(revived.disposed, true);
+      assert.equal(h.createdTerminal.disposed, false);
+      assert.deepEqual(h.createdTerminal.sent, [["herdr", true]]);
+      assert.deepEqual(revived.sent, []);
+    });
+
+    it("keeps a reconnected tab whose shell still has a herdr client", async () => {
+      const h = await createdHarness();
+      const revived = new FakeTerminal("herdr");
+      h.terminalHosting.set(revived, "yes");
+      h.auto.onTerminalOpened(revived);
+      await flush();
+      assert.equal(revived.disposed, false);
+      assert.equal(h.createdTerminal.disposed, false);
+    });
+
+    it("keeps both tabs when the process tree cannot be read", async () => {
+      const h = await createdHarness();
+      const revived = new FakeTerminal("herdr");
+      h.terminalHosting.set(revived, "unknown");
+      h.auto.onTerminalOpened(revived);
+      await flush();
+      assert.equal(revived.disposed, false);
+      assert.equal(h.createdTerminal.disposed, false);
+    });
+
+    it("reconciles a revived tab that opened while the repair was held", async () => {
+      const h = harness(record(), { distinctTerminals: true });
+      const release = h.holdRepair();
+      h.auto.start();
+      await h.auto.onHosting("no");
+      await h.clock.advance(1600);
+      const revived = new FakeTerminal("herdr");
+      h.auto.onTerminalOpened(revived);
+      await flush();
+      assert.equal(revived.disposed, false);
+      release();
+      await flush();
+      assert.equal(h.madeTerminals.length, 1);
+      assert.equal(revived.disposed, true);
+      assert.equal(h.madeTerminals[0]?.disposed, false);
+    });
+
+    it("ignores the created terminal's own open event", async () => {
+      const h = await createdHarness();
+      h.auto.onTerminalOpened(h.createdTerminal);
+      await flush();
+      assert.equal(h.createdTerminal.disposed, false);
+    });
+
+    it("keeps a revived tab the user interacted with", async () => {
+      const h = await createdHarness();
+      const revived = new FakeTerminal("herdr", true);
+      h.auto.onTerminalOpened(revived);
+      await flush();
+      assert.equal(revived.disposed, false);
+      assert.equal(h.createdTerminal.disposed, false);
+    });
+
+    it("keeps a revived tab whose shell is the herdr binary", async () => {
+      const h = await createdHarness();
+      const revived = new FakeTerminal("herdr", false, { shellPath: "C:\\bin\\herdr.exe" });
+      h.auto.onTerminalOpened(revived);
+      await flush();
+      assert.equal(revived.disposed, false);
+    });
+
+    it("leaves terminals with other names alone", async () => {
+      const h = await createdHarness();
+      const other = new FakeTerminal("bash");
+      h.auto.onTerminalOpened(other);
+      await flush();
+      assert.equal(other.disposed, false);
+    });
+
+    it("stops reconciling after the safety net", async () => {
+      const h = await createdHarness();
+      await h.clock.advance(61_000);
+      const late = new FakeTerminal("herdr");
+      h.auto.onTerminalOpened(late);
+      await flush();
+      assert.equal(late.disposed, false);
+    });
+
+    it("never disposes when the extension created nothing", async () => {
+      const revived = new FakeTerminal("herdr");
+      const h = harness(record(), { terminals: [revived] });
+      h.auto.start();
+      await h.auto.onHosting("no");
+      await h.clock.advance(1600);
+      assert.equal(h.created.length, 0);
+      const second = new FakeTerminal("herdr");
+      h.auto.onTerminalOpened(second);
+      await flush();
+      assert.equal(revived.disposed, false);
+      assert.equal(second.disposed, false);
+    });
+
+    it("keeps a late tab the user typed into while it was being scanned", async () => {
+      const h = await createdHarness();
+      const revived = new FakeTerminal("herdr");
+      // The pre-scan check has already passed when the scan is awaited; typing now is only caught by the recheck.
+      h.auto.onTerminalOpened(revived);
+      revived.state.isInteractedWith = true;
+      await flush();
+      assert.equal(revived.disposed, false);
+    });
   });
 
   for (const [platform, lastFolder, cwd] of [
@@ -678,6 +819,88 @@ describe("AutoLaunch launchNow", () => {
     const h = harness(record(), { herdrPath: undefined });
     assert.equal(await h.auto.launchNow(), "herdr-missing");
     assert.equal(h.created.length, 0);
+  });
+
+  it("reuses an untouched herdr tab instead of opening a second one, with auto-launch off", async () => {
+    const existing = new FakeTerminal("herdr");
+    const h = harness(record({ herdrWasRunning: false }), { terminals: [existing] });
+    h.setEnabled(false);
+    assert.equal(await h.auto.launchNow(), "launched");
+    assert.equal(h.created.length, 0);
+    assert.deepEqual(existing.sent, [["herdr", true]]);
+  });
+
+  it("is busy during the settle window, so a click and auto-launch create one terminal", async () => {
+    const h = harness(record(), { distinctTerminals: true });
+    h.auto.start();
+    await h.auto.onHosting("no");
+    assert.equal(await h.auto.launchNow(), "busy");
+    await h.clock.advance(1600);
+    assert.equal(h.madeTerminals.length, 1);
+    assert.deepEqual(h.madeTerminals[0]?.sent, [["herdr", true]]);
+  });
+
+  it("shows the terminal auto-launch just started instead of launching again while the scan still says no", async () => {
+    const h = harness(record(), { distinctTerminals: true });
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    assert.equal(h.madeTerminals.length, 1);
+    assert.equal(await h.auto.launchNow(), "shown");
+    assert.equal(h.madeTerminals.length, 1);
+    assert.deepEqual(h.madeTerminals[0]?.sent, [["herdr", true]]);
+    assert.equal(h.madeTerminals[0]?.shown, 1);
+  });
+
+  it("launches again once the started terminal is closed or the start grace has passed", async () => {
+    const h = harness(record(), { distinctTerminals: true });
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    h.terminals.length = 0;
+    assert.equal(await h.auto.launchNow(), "launched");
+    assert.equal(h.madeTerminals.length, 2);
+    await h.clock.advance(11_000);
+    assert.equal(await h.auto.launchNow(), "launched");
+    // The untouched herdr tab from the second launch is reused rather than shown.
+    assert.equal(h.madeTerminals.length, 2);
+    assert.deepEqual(h.madeTerminals[1]?.sent, [["herdr", true], ["herdr", true]]);
+  });
+
+  it("reconciles a revived tab that opens while a click is launching", async () => {
+    const h = harness(record(), { distinctTerminals: true });
+    h.setEnabled(false);
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    assert.equal(h.created.length, 0);
+    const release = h.holdRepair();
+    const click = h.auto.launchNow();
+    await flush();
+    const revived = new FakeTerminal("herdr");
+    h.auto.onTerminalOpened(revived);
+    await flush();
+    assert.equal(revived.disposed, false);
+    release();
+    assert.equal(await click, "launched");
+    await flush();
+    assert.equal(h.madeTerminals.length, 1);
+    assert.equal(revived.disposed, true);
+    assert.deepEqual(revived.sent, []);
+    assert.equal(h.madeTerminals[0]?.disposed, false);
+  });
+
+  it("is busy while auto-launch repairs, so nothing created is disposed", async () => {
+    const h = harness(record(), { distinctTerminals: true });
+    h.auto.start();
+    await h.auto.onHosting("no");
+    const release = h.holdRepair();
+    await h.clock.advance(1600);
+    assert.equal(await h.auto.launchNow(), "busy");
+    release();
+    await flush();
+    assert.equal(h.madeTerminals.length, 1);
+    assert.ok(h.madeTerminals.every((terminal) => !terminal.disposed));
   });
 });
 
