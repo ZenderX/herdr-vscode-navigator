@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "mocha";
-import { HERDR_INSTALL_URL, HerdrPresence, handleNotInstalledClick } from "../../../launch/herdrPresence";
+import { HERDR_INSTALL_URL, HerdrPresence, handleNotInstalledClick, showsNotInstalled } from "../../../launch/herdrPresence";
 import type { HerdrPresenceState } from "../../../launch/herdrPresence";
 
 function setup(initial: string | undefined) {
@@ -124,6 +124,20 @@ describe("HerdrPresence", () => {
     for (let i = 0; i < 5; i++) t.presence.get();
     await flush();
     assert.equal(t.calls(), 1);
+  });
+});
+
+describe("showsNotInstalled", () => {
+  it("keeps the installed look while unknown, so startup never flashes 'not installed'", () => {
+    assert.equal(showsNotInstalled({ state: "unknown" }), false);
+  });
+
+  it("keeps the installed look when found", () => {
+    assert.equal(showsNotInstalled({ state: "found", path: "/bin/herdr" }), false);
+  });
+
+  it("shows not installed only for a confirmed miss", () => {
+    assert.equal(showsNotInstalled({ state: "not-found" }), true);
   });
 });
 

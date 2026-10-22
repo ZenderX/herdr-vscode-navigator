@@ -74,6 +74,14 @@
         "title": "Herdr Navigator: Repair herdr session folders"
       }
     ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "herdrNavigator.openHerdrInstall",
+          "when": "false"
+        }
+      ]
+    },
     "keybindings": [
       {
         "command": "herdrNavigator.followNow",

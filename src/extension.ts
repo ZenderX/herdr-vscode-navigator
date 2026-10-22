@@ -22,7 +22,7 @@ import type { FolderPlan, PendingTarget } from "./follow";
 import { findGitRoot } from "./follow/gitRoot";
 import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, SessionSnapshot } from "./herdr";
-import { HerdrPresence, handleNotInstalledClick } from "./launch/herdrPresence";
+import { HerdrPresence, handleNotInstalledClick, showsNotInstalled } from "./launch/herdrPresence";
 import { readLease, writeLease } from "./launch/navigatorLease";
 import { PLUGIN_HINT_DISMISSED_KEY, PluginHint, handlePluginHintClick, installPluginInTerminal } from "./launch/pluginHint";
 import { PENDING_TAKEOVER_MAX_MS } from "./launch/planAutoLaunch";
@@ -714,7 +714,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const connected = connection.isConnected();
     const autoFollow = controller.getState().autoFollow;
     const suppressed = !autoFollow || consent.autoAllowed() ? undefined : consent.suppressionReason();
-    statusBar.update(connected, autoFollow, tracked, host.get() !== "no", suppressed, presence.get().state !== "not-found");
+    statusBar.update(connected, autoFollow, tracked, host.get() !== "no", suppressed, !showsNotInstalled(presence.get()));
     poller.start(pollIntervalMs({ connected, autoFollow, host: host.get(), confirmedHere: consent.confirmedHere(), cwdPollMs: settings.cwdPollMs }));
   }
 

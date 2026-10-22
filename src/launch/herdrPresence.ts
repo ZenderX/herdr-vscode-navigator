@@ -6,6 +6,11 @@ export const HERDR_INSTALL_URL = "https://herdr.dev/docs/install/";
 /** `unknown` holds until the first resolution completes, so startup never flashes "not installed". */
 export type HerdrPresenceState = { state: "found"; path: string } | { state: "not-found" } | { state: "unknown" };
 
+/** Only a confirmed miss reads as "not installed"; `unknown` keeps the installed look. */
+export function showsNotInstalled(presence: HerdrPresenceState): boolean {
+  return presence.state === "not-found";
+}
+
 export interface PresenceDeps {
   resolve: () => Promise<string | undefined>;
   /** Reports window focus changes; `focused` is true on gain. */
