@@ -1,4 +1,4 @@
-.PHONY: install package reinstall
+.PHONY: install package reinstall link-plugin unlink-plugin
 
 # Suppresses Node's DEP0169 warning emitted by the `code` CLI
 export NODE_OPTIONS := --no-deprecation
@@ -15,3 +15,11 @@ package:
 reinstall:
 	$(MAKE) package
 	$(MAKE) install
+
+# Registers the plugin globally in herdr; unlink when done testing
+link-plugin:
+	herdr plugin link "$(CURDIR)/plugin"
+
+unlink-plugin:
+	herdr plugin unlink zenderx.refocus-last-space
+	@echo "Note: the plugin's saved record stays in %LOCALAPPDATA%\herdr\plugins\zenderx.refocus-last-space"
