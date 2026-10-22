@@ -24,6 +24,7 @@ import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, SessionSnapshot } from "./herdr";
 import { HerdrPresence, handleNotInstalledClick } from "./launch/herdrPresence";
 import { readLease, writeLease } from "./launch/navigatorLease";
+import { PLUGIN_HINT_DISMISSED_KEY, PluginHint, handlePluginHintClick, installPluginInTerminal } from "./launch/pluginHint";
 import { PENDING_TAKEOVER_MAX_MS } from "./launch/planAutoLaunch";
 import type { WindowKind } from "./launch/planAutoLaunch";
 import { readRecord } from "./launch/sessionState";
@@ -465,6 +466,7 @@ interface CommandsEnv {
   refreshStatus: () => void;
   repair: () => Promise<RepairOutcome>;
   presence: HerdrPresence;
+  pluginHint: PluginHint;
   host: ReturnType<typeof createHostState>;
 }
 
@@ -478,6 +480,19 @@ function registerCommands(env: CommandsEnv): vscode.Disposable[] {
           await vscode.commands.executeCommand(env.host.get() !== "no" ? TOGGLE_COMMAND : LAUNCH_COMMAND);
         },
         openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
+      }),
+    ),
+    vscode.commands.registerCommand("herdrNavigator.pluginHint", () =>
+      handlePluginHintClick({
+        showMessage: (message, ...items) => vscode.window.showInformationMessage(message, ...items),
+        openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
+        install: () =>
+          installPluginInTerminal({
+            createTerminal: () => vscode.window.createTerminal({ name: "Herdr plugin install" }),
+            onDidCloseTerminal: (listener) => vscode.window.onDidCloseTerminal(listener),
+            refresh: () => env.pluginHint.refresh(),
+          }),
+        dismiss: () => env.pluginHint.dismiss(),
       }),
     ),
     vscode.commands.registerCommand("herdrNavigator.followNow", async () => {
@@ -609,6 +624,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     subscribeFocus: (listener) => vscode.window.onDidChangeWindowState(({ focused }) => listener(focused)),
     log,
   });
+  context.globalState.setKeysForSync([PLUGIN_HINT_DISMISSED_KEY]);
+  // Lower priority than the main item, so it sits to its right.
+  const hintItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
+  hintItem.text = "$(plug)";
+  hintItem.tooltip = "Optional herdr plugin: re-focus your last space after a crash or reboot (click for details)";
+  hintItem.command = "herdrNavigator.pluginHint";
+  const pluginHint = new PluginHint({
+    presence,
+    detect: (herdrPath) => detectRefocusPlugin(nodeProbeDeps().execFile, herdrPath),
+    isDismissed: () => context.globalState.get<boolean>(PLUGIN_HINT_DISMISSED_KEY, false),
+    setDismissed: () => Promise.resolve(context.globalState.update(PLUGIN_HINT_DISMISSED_KEY, true)),
+    setVisible: (visible) => (visible ? hintItem.show() : hintItem.hide()),
+  });
   const repair = createRepairRunner(context, platform, log, socketName);
   const autoLaunch = createAutoLaunch({
     repair,
@@ -738,7 +766,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => hostingMonitor.dispose() },
     { dispose: () => autoLaunch.dispose() },
     { dispose: () => presence.dispose() },
-    ...registerCommands({ output, diagnostics, controller, consent, connection, autoLaunch, requestHosting, refreshStatus, repair, presence, host }),
+    { dispose: () => pluginHint.dispose() },
+    hintItem,
+    ...registerCommands({ output, diagnostics, controller, consent, connection, autoLaunch, requestHosting, refreshStatus, repair, presence, pluginHint, host }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       refreshStatus();
       refreshWindowTitle();
@@ -758,6 +788,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Subscribed only now: refreshStatus needs the connection and controller built above.
   context.subscriptions.push(presence.onChange(() => refreshStatus()));
   await presence.recheck();
+  await pluginHint.refresh();
   refreshStatus();
   refreshWindowTitle();
   autoLaunch.start();

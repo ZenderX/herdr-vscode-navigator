@@ -58,6 +58,10 @@
         "title": "Herdr: Open Herdr Install Page"
       },
       {
+        "command": "herdrNavigator.pluginHint",
+        "title": "Herdr: About the Optional Re-focus Plugin"
+      },
+      {
         "command": "herdrNavigator.reconnect",
         "title": "Herdr: Reconnect"
       },

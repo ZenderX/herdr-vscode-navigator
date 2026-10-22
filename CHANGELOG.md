@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- When herdr is installed but the optional `zenderx.refocus-last-space` plugin is not installed or not enabled, a small plug icon appears next to the status bar item. Clicking it explains the plugin and offers Install (runs `herdr plugin install ZenderX/herdr-vscode-navigator/plugin` in a visible terminal, where herdr asks for confirmation), Learn more, and Don't show again (remembered across reloads and synced). The plugin is checked at startup, when herdr first appears, and after the install terminal closes. New command `herdrNavigator.pluginHint`.
 - When herdr is not installed the status bar item now reads `herdr: not installed` and a click opens herdr's install page (https://herdr.dev/docs/install/). The extension looks again for herdr when the window regains focus and on that click, so a fresh install is picked up without a reload. New command `herdrNavigator.openHerdrInstall` (Herdr: Open Herdr Install Page).
 - Clicking the status bar item now launches herdr in an editor-area terminal tab when herdr is not running in this window, and toggles auto-follow when it is; the tooltip names the action. New command `herdrNavigator.launchHerdr` (Herdr: Launch Herdr).
 - The status bar item now shows auto-follow state at a glance: an open eye when on, a dimmed closed eye when off.
