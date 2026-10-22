@@ -37,7 +37,7 @@ Start herdr in the integrated terminal. The window then follows the folder of wh
 
 Only the window that hosts herdr follows automatically. "Herdr: Follow Focused Pane Now" works in any window.
 
-The status bar item shows the followed folder, with an open eye when auto-follow is on and a dimmed closed eye when it is off. Click it to launch herdr in an editor tab when herdr is not running in this window, or to toggle auto-follow when it is.
+The status bar item shows the followed folder, with an open eye when auto-follow is on and a dimmed closed eye when it is off. Click it to launch herdr in an editor tab when herdr is not running in this window, or to toggle auto-follow when it is. When herdr is not installed, the item reads "not installed" and a click opens the [herdr install page](https://herdr.dev/docs/install/).
 
 ## Restoring pane folders
 
@@ -45,7 +45,7 @@ herdr 0.9.5 restores panes in the folder they were spawned in, not the one they 
 
 ## Optional herdr plugin
 
-A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it, but when the plugin is installed and enabled the extension leaves re-focusing after a launch to it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`.
+A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it, but when the plugin is installed and enabled the extension leaves re-focusing after a launch to it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`, or click the small hint next to the status bar item that appears while the plugin is missing or disabled; the hint can be hidden for good.
 
 ## Commands
 

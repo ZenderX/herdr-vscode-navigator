@@ -41,6 +41,25 @@ Install the packaged VSIX and run it in a normal window; never press F5 for thes
 2. With `herdrNavigator.autoFollow` on, focus a second space in herdr.
    Expected: the title bar changes to `herdr - <second space label> - Visual Studio Code` without a window reload. The Explorer header still reads `NAVIGATOR (WORKSPACE)`; that is a VS Code limit.
 
+## Plugin hint and herdr not installed
+
+Use the installed VSIX in a normal window, not F5. Do not pass `--yes` to any install by hand.
+
+1. Plugin hint. With herdr on PATH and the plugin absent or disabled (`herdr plugin list`), reload the window.
+   Expected: a small second status bar item appears next to the main one, with a tooltip naming the optional herdr plugin. No notification or dialog appears on its own.
+2. Click the hint.
+   Expected: a message of one or two sentences explains the plugin, with the buttons Install, Learn more and a hide-for-good choice. Learn more opens `https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md` and the hint stays.
+3. Choose Install.
+   Expected: a visible terminal opens and runs `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`, then waits for you to confirm herdr's preview. Nothing installs until you confirm.
+4. Confirm the install, then close the terminal.
+   Expected: the hint disappears. Repeat with the plugin disabled and the same steps; declining and closing the terminal leaves the hint visible.
+5. Hide for good. Make the plugin absent again, click the hint and choose the hide option, then run "Developer: Reload Window".
+   Expected: the hint disappears at once and stays hidden after the reload.
+6. herdr not installed. Start VS Code with a PATH that omits herdr: on Windows, set `PATH` to exclude herdr's folder in a terminal and run `code` from it; on macOS and Linux, run `env PATH=/usr/bin:/bin code` from a shell. Make sure VS Code was fully quit first.
+   Expected: no plugin hint appears, the main item reads `herdr: not installed` with a tooltip saying a click opens the install page.
+7. Click the main item.
+   Expected: the browser opens `https://herdr.dev/docs/install/`. After installing herdr, focusing the window again or clicking the item picks it up without a reload.
+
 ## Session restore
 
 Needs herdr on PATH and `herdrNavigator.autoLaunch` on (default). Use the installed VSIX in a normal window, not F5.
