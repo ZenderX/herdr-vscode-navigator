@@ -26,6 +26,7 @@ import { readLease, writeLease } from "./launch/navigatorLease";
 import { PENDING_TAKEOVER_MAX_MS } from "./launch/planAutoLaunch";
 import type { WindowKind } from "./launch/planAutoLaunch";
 import { readRecord } from "./launch/sessionState";
+import { detectRefocusPlugin } from "./launch/pluginDetect";
 import { resolveOnPath } from "./launch/whichHerdr";
 import { DIAGNOSTIC_TOPICS, channelWriter, createLog, errorText } from "./log";
 import type { DiagnosticLog } from "./log";
@@ -268,6 +269,7 @@ function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
     createTerminal: (options) => vscode.window.createTerminal(options),
     editorLocation: vscode.TerminalLocation.Editor,
     resolveHerdr: () => resolveOnPath("herdr", process.platform, process.env),
+    detectPlugin: (herdrPath) => detectRefocusPlugin(nodeProbeDeps().execFile, herdrPath),
     repairOnLaunch: () => vscode.workspace.getConfiguration("herdrNavigator").get<boolean>("repairSessionOnLaunch", true),
     repairSession: () => env.repair().then(() => undefined),
     rescan: () => env.requestHosting(true),

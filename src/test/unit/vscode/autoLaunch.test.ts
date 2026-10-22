@@ -6,6 +6,7 @@ import type { HostState } from "../../../hosting";
 import { activateNavigator, applyFolderPlan } from "../../../follow/applyFolderPlan";
 import { planFolders } from "../../../follow/planFolders";
 import type { NavigatorLease } from "../../../launch/navigatorLease";
+import type { PluginState } from "../../../launch/pluginDetect";
 import type { WindowKind } from "../../../launch/planAutoLaunch";
 import { empty, readRecord } from "../../../launch/sessionState";
 import type { SessionRecord } from "../../../launch/sessionState";
@@ -84,6 +85,8 @@ interface Harness {
   /** Pids the fake process probe reports as running. */
   alive: Set<number>;
   setEnabled: (value: boolean) => void;
+  setPlugin: (state: PluginState) => void;
+  pluginCalls: number;
   setRescan: (state: HostState) => void;
   /** Makes later rescans wait until the returned release is called. */
   holdRescan: () => () => void;
@@ -130,6 +133,7 @@ function harness(
   const rescans: HostState[] = [];
   const rechecks: HostState[] = [];
   let enabled = true;
+  let pluginState: PluginState = "absent";
   let rescanState = options.rescanState ?? "no";
   let gate: Promise<void> | undefined;
   let repairOnLaunch = true;
@@ -156,6 +160,10 @@ function harness(
       h.repairs.push(`end sent=${h.createdTerminal.sent.length}`);
     },
     resolveHerdr: () => Promise.resolve("herdrPath" in options ? options.herdrPath : "C:\\bin\\herdr.exe"),
+    detectPlugin: () => {
+      h.pluginCalls += 1;
+      return Promise.resolve(pluginState);
+    },
     rescan: async () => {
       rescans.push(rescanState);
       await gate;
@@ -189,7 +197,11 @@ function harness(
   };
   h.converted = [];
   h.migrated = 0;
+  h.pluginCalls = 0;
   h.auto = new AutoLaunch(deps);
+  h.setPlugin = (state) => {
+    pluginState = state;
+  };
   h.setEnabled = (value) => {
     enabled = value;
   };
@@ -666,6 +678,66 @@ describe("AutoLaunch launchNow", () => {
     const h = harness(record(), { herdrPath: undefined });
     assert.equal(await h.auto.launchNow(), "herdr-missing");
     assert.equal(h.created.length, 0);
+  });
+});
+
+describe("AutoLaunch plugin-first re-focus", () => {
+  const remembered = (): SessionRecord => record({ lastFolder: "C:\\proj", lastSpaceLabel: "beta" });
+
+  it("skips its own re-focus when the plugin is present", async () => {
+    const h = harness(remembered());
+    h.setPlugin("present");
+    assert.equal(await h.auto.launchNow(), "launched");
+    await h.clock.advance(16_000);
+    assert.ok(h.logs.some((line) => line.includes("refocus deferred to plugin")));
+    assert.ok(!h.logs.some((line) => line.includes("gave up focusing")));
+  });
+
+  for (const state of ["absent", "unknown"] as const) {
+    it(`falls back to its own re-focus when the plugin is ${state}`, async () => {
+      const h = harness(remembered());
+      h.setPlugin(state);
+      assert.equal(await h.auto.launchNow(), "launched");
+      await h.clock.advance(16_000);
+      assert.ok(!h.logs.some((line) => line.includes("refocus deferred to plugin")));
+      assert.ok(h.logs.some((line) => line.includes("gave up focusing")));
+    });
+  }
+
+  it("defers on the auto-launch path too", async () => {
+    const h = harness(remembered());
+    h.setPlugin("present");
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(2000);
+    assert.equal(h.created.length, 1);
+    await h.clock.advance(16_000);
+    assert.ok(h.logs.some((line) => line.includes("refocus deferred to plugin")));
+  });
+
+  it("still focuses an explicit takeover folder when the plugin is present", async () => {
+    const h = harness(record({ pendingTakeoverFolder: "C:\\proj", lastFolder: "C:\\elsewhere", lastSpaceLabel: "beta" }), { folder: "C:\\proj" });
+    h.setPlugin("present");
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(1600);
+    h.setRescan("yes");
+    await h.clock.advance(16_000);
+    assert.ok(!h.logs.some((line) => line.includes("refocus deferred to plugin")));
+    assert.deepEqual(h.focused, ["w1"]);
+  });
+
+  it("does not detect the plugin when there is no label to re-focus", async () => {
+    const h = harness(record({ lastFolder: "C:\\proj" }));
+    h.setPlugin("present");
+    assert.equal(await h.auto.launchNow(), "launched");
+    assert.equal(h.pluginCalls, 0);
+  });
+
+  it("detects the plugin once per launch with a label", async () => {
+    const h = harness(remembered());
+    assert.equal(await h.auto.launchNow(), "launched");
+    assert.equal(h.pluginCalls, 1);
   });
 });
 

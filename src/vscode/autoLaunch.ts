@@ -5,6 +5,7 @@ import type { Logger, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
 import { LEASE_STALE_MS, TAKEOVER_GRACE_MS } from "../launch/navigatorLease";
 import type { NavigatorLease } from "../launch/navigatorLease";
+import type { PluginState } from "../launch/pluginDetect";
 import { planAutoLaunch, planTakeover } from "../launch/planAutoLaunch";
 import type { LaunchPlan, WindowKind } from "../launch/planAutoLaunch";
 import { readRecord, reduce } from "../launch/sessionState";
@@ -50,6 +51,8 @@ export interface AutoLaunchDeps {
   createTerminal: (options: { name: string; location: TerminalLocation; cwd?: string }) => AutoLaunchTerminal;
   editorLocation: TerminalLocation;
   resolveHerdr: () => Promise<string | undefined>;
+  /** Whether the companion re-focus plugin is installed and enabled; never rejects. */
+  detectPlugin: (herdrPath: string) => Promise<PluginState>;
   /** Whether herdr's session folders are repaired just before herdr is typed. */
   repairOnLaunch: () => boolean;
   /** Repairs herdr's session file; never rejects the launch, and is awaited so the write completes first. */
@@ -394,7 +397,8 @@ export class AutoLaunch {
     const { pendingTakeoverFolder } = this.record;
     if (pendingTakeoverFolder !== undefined && deps.isNavigator()) await this.apply({ type: "takeoverConsumed" });
     if (plan.action === "none") return;
-    await this.execute(plan, terminals);
+    if (herdrPath === undefined) return;
+    await this.execute(plan, terminals, herdrPath);
   }
 
   /** An explicit launch (status-bar click): skips the auto-launch rules, needs only herdr on PATH. */
@@ -406,19 +410,22 @@ export class AutoLaunch {
       await deps.rescan();
       // Undetectable hosting counts as hosting, as in auto-launch: a duplicate herdr is worse than a missed launch.
       if (this.lastState !== "no") return "running";
-      if ((await deps.resolveHerdr()) === undefined) return "herdr-missing";
+      const herdrPath = await deps.resolveHerdr();
+      if (herdrPath === undefined) return "herdr-missing";
       const { lastFolder, lastSpaceLabel } = this.record;
       const cwd = normalizeCwd(lastFolder, deps.platform) ?? undefined;
       this.deps.log("info", `launch: create herdr cwd=${cwd ?? "none"} focus=${lastSpaceLabel ?? "none"}`);
-      await this.execute({ action: "create", name: "herdr", command: "herdr", cwd, focusLabel: lastSpaceLabel }, []);
+      await this.execute({ action: "create", name: "herdr", command: "herdr", cwd, focusLabel: lastSpaceLabel }, [], herdrPath);
       return "launched";
     } finally {
       this.launching = false;
     }
   }
 
-  private async execute(plan: Exclude<LaunchPlan, { action: "none" }>, terminals: readonly AutoLaunchTerminal[]): Promise<void> {
+  private async execute(plan: Exclude<LaunchPlan, { action: "none" }>, terminals: readonly AutoLaunchTerminal[], herdrPath: string): Promise<void> {
     const { deps } = this;
+    // Only a remembered-label re-focus can be left to the plugin; started now so it overlaps repair and terminal creation, once per launch, never on a poll.
+    const pluginState = plan.focusLabel !== undefined && plan.focusFolder === undefined ? deps.detectPlugin(herdrPath) : undefined;
     if (deps.repairOnLaunch()) {
       try {
         await deps.repairSession();
@@ -438,6 +445,10 @@ export class AutoLaunch {
         ...(plan.cwd === undefined ? {} : { cwd: plan.cwd }),
       });
       terminal.sendText(plan.command, true);
+    }
+    // The plugin's startup hook re-focuses once the server starts; an already-running server keeps its live focus.
+    if (pluginState !== undefined && (await pluginState) === "present") {
+      return deps.log("info", "auto-launch: refocus deferred to plugin");
     }
     if (plan.focusFolder !== undefined) {
       const { focusFolder } = plan;

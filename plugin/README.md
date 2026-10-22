@@ -33,4 +33,4 @@ herdr plugin unlink zenderx.refocus-last-space
 
 ## With the VS Code extension
 
-The Herdr Navigator extension re-focuses its own space on auto-launch and does not need this plugin. Install the plugin if you want the same behaviour for herdr on its own.
+The Herdr Navigator extension does not need this plugin, but when it launches herdr it checks once (`herdr plugin list --json`) and, if this plugin is installed and enabled, leaves the re-focus to it; otherwise it re-focuses the remembered space itself. Deferring is safe because the plugin's startup hook runs once per herdr server start, after the session is restored, and not when a client attaches: either the server starts and the hook re-focuses, or it was already running and its focus is current. If your herdr version does not report whether a plugin is enabled, the extension defers whenever the plugin is installed. Install the plugin if you want the same behaviour for herdr on its own.

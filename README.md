@@ -45,7 +45,7 @@ herdr 0.9.5 restores panes in the folder they were spawned in, not the one they 
 
 ## Optional herdr plugin
 
-A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`.
+A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it, but when the plugin is installed and enabled the extension leaves re-focusing after a launch to it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`.
 
 ## Commands
 
