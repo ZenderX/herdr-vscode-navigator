@@ -54,6 +54,10 @@
         "title": "Herdr: Launch Herdr"
       },
       {
+        "command": "herdrNavigator.openHerdrInstall",
+        "title": "Herdr: Open Herdr Install Page"
+      },
+      {
         "command": "herdrNavigator.reconnect",
         "title": "Herdr: Reconnect"
       },

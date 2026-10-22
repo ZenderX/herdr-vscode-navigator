@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "mocha";
-import { LAUNCH_COMMAND, StatusBar, TOGGLE_COMMAND } from "../../../vscode/statusBar";
+import { INSTALL_COMMAND, LAUNCH_COMMAND, StatusBar, TOGGLE_COMMAND } from "../../../vscode/statusBar";
 import type { StatusBarItemLike } from "../../../vscode/statusBar";
 import type { ThemeColor } from "vscode";
 
@@ -51,6 +51,36 @@ describe("StatusBar auto-follow look", () => {
     bar.update(false, false, null, false);
     assert.match(item.text, /^\$\(eye-closed\)/);
     assert.equal(item.command, LAUNCH_COMMAND);
+  });
+});
+
+describe("StatusBar when herdr is not installed", () => {
+  it("says so, keeps the eye icon, and clicks through to the install page command", () => {
+    const item = fakeItem();
+    const bar = new StatusBar(item, themeColor);
+    bar.update(false, true, null, false, undefined, false);
+    assert.equal(item.text, "$(eye) herdr: not installed");
+    assert.equal(item.command, INSTALL_COMMAND);
+    assert.match(item.tooltip ?? "", /install page/);
+  });
+
+  it("shows no not-installed text by default (before the first resolution completes)", () => {
+    const item = fakeItem();
+    const bar = new StatusBar(item, themeColor);
+    bar.update(false, true, null, false);
+    assert.doesNotMatch(item.text, /not installed/);
+    assert.doesNotMatch(item.tooltip ?? "", /not installed/);
+    assert.equal(item.command, LAUNCH_COMMAND);
+  });
+
+  it("restores the launch click once herdr is found again", () => {
+    const item = fakeItem();
+    const bar = new StatusBar(item, themeColor);
+    bar.update(false, false, null, false, undefined, false);
+    assert.match(item.text, /^\$\(eye-closed\) herdr: not installed/);
+    bar.update(false, false, null, false, undefined, true);
+    assert.equal(item.command, LAUNCH_COMMAND);
+    assert.match(item.text, /herdr: disconnected/);
   });
 });
 

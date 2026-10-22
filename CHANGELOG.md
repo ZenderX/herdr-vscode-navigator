@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- When herdr is not installed the status bar item now reads `herdr: not installed` and a click opens herdr's install page (https://herdr.dev/docs/install/). The extension looks again for herdr when the window regains focus and on that click, so a fresh install is picked up without a reload. New command `herdrNavigator.openHerdrInstall` (Herdr: Open Herdr Install Page).
 - Clicking the status bar item now launches herdr in an editor-area terminal tab when herdr is not running in this window, and toggles auto-follow when it is; the tooltip names the action. New command `herdrNavigator.launchHerdr` (Herdr: Launch Herdr).
 - The status bar item now shows auto-follow state at a glance: an open eye when on, a dimmed closed eye when off.
 - After launching herdr (status bar click or auto-launch on restore) the extension now defers re-focusing the last space to the optional `zenderx.refocus-last-space` herdr plugin when it is installed and enabled (one `herdr plugin list --json` call per launch), and falls back to its own re-focus otherwise.

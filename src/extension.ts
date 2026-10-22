@@ -22,6 +22,7 @@ import type { FolderPlan, PendingTarget } from "./follow";
 import { findGitRoot } from "./follow/gitRoot";
 import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, SessionSnapshot } from "./herdr";
+import { HerdrPresence, handleNotInstalledClick } from "./launch/herdrPresence";
 import { readLease, writeLease } from "./launch/navigatorLease";
 import { PENDING_TAKEOVER_MAX_MS } from "./launch/planAutoLaunch";
 import type { WindowKind } from "./launch/planAutoLaunch";
@@ -50,7 +51,7 @@ import { selectAnchor } from "./vscode/anchorPath";
 import type { AnchorChoice } from "./vscode/anchorPath";
 import { affectsSettings, readSettings, setAutoFollow } from "./vscode/settings";
 import type { Settings } from "./vscode/settings";
-import { StatusBar } from "./vscode/statusBar";
+import { LAUNCH_COMMAND, StatusBar, TOGGLE_COMMAND } from "./vscode/statusBar";
 import { createWindowTitleSync, focusedLabel } from "./vscode/windowTitle";
 import {
   convertToNavigatorWorkspace,
@@ -463,11 +464,22 @@ interface CommandsEnv {
   requestHosting: (force?: boolean) => Promise<void>;
   refreshStatus: () => void;
   repair: () => Promise<RepairOutcome>;
+  presence: HerdrPresence;
+  host: ReturnType<typeof createHostState>;
 }
 
 function registerCommands(env: CommandsEnv): vscode.Disposable[] {
   const { controller, consent, autoLaunch, requestHosting, refreshStatus } = env;
   return [
+    vscode.commands.registerCommand("herdrNavigator.openHerdrInstall", () =>
+      handleNotInstalledClick({
+        recheck: () => env.presence.recheck(),
+        runInstalled: async () => {
+          await vscode.commands.executeCommand(env.host.get() !== "no" ? TOGGLE_COMMAND : LAUNCH_COMMAND);
+        },
+        openExternal: (url) => vscode.env.openExternal(vscode.Uri.parse(url)),
+      }),
+    ),
     vscode.commands.registerCommand("herdrNavigator.followNow", async () => {
       consent.setManualFollow(true);
       try {
@@ -592,6 +604,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     requestHosting,
     refreshStatus: () => refreshStatus(),
   });
+  const presence = new HerdrPresence({
+    resolve: () => resolveOnPath("herdr", process.platform, process.env),
+    subscribeFocus: (listener) => vscode.window.onDidChangeWindowState(({ focused }) => listener(focused)),
+    log,
+  });
   const repair = createRepairRunner(context, platform, log, socketName);
   const autoLaunch = createAutoLaunch({
     repair,
@@ -669,7 +686,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const connected = connection.isConnected();
     const autoFollow = controller.getState().autoFollow;
     const suppressed = !autoFollow || consent.autoAllowed() ? undefined : consent.suppressionReason();
-    statusBar.update(connected, autoFollow, tracked, host.get() !== "no", suppressed);
+    statusBar.update(connected, autoFollow, tracked, host.get() !== "no", suppressed, presence.get().state !== "not-found");
     poller.start(pollIntervalMs({ connected, autoFollow, host: host.get(), confirmedHere: consent.confirmedHere(), cwdPollMs: settings.cwdPollMs }));
   }
 
@@ -720,7 +737,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => controller.dispose() },
     { dispose: () => hostingMonitor.dispose() },
     { dispose: () => autoLaunch.dispose() },
-    ...registerCommands({ output, diagnostics, controller, consent, connection, autoLaunch, requestHosting, refreshStatus, repair }),
+    { dispose: () => presence.dispose() },
+    ...registerCommands({ output, diagnostics, controller, consent, connection, autoLaunch, requestHosting, refreshStatus, repair, presence, host }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       refreshStatus();
       refreshWindowTitle();
@@ -737,6 +755,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     output,
   );
 
+  // Subscribed only now: refreshStatus needs the connection and controller built above.
+  context.subscriptions.push(presence.onChange(() => refreshStatus()));
+  await presence.recheck();
   refreshStatus();
   refreshWindowTitle();
   autoLaunch.start();
