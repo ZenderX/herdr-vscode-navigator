@@ -1,20 +1,26 @@
 import * as path from "node:path";
-import * as vscode from "vscode";
+import type { StatusBarItem } from "vscode";
 
-export class StatusBar implements vscode.Disposable {
-  private readonly item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left);
+export const TOGGLE_COMMAND = "herdrNavigator.toggleAutoFollow";
+export const LAUNCH_COMMAND = "herdrNavigator.launchHerdr";
 
-  constructor() {
-    this.item.command = "herdrNavigator.toggleAutoFollow";
-    this.update(false, false, null);
+/** The slice of vscode.StatusBarItem this module touches. */
+export type StatusBarItemLike = Pick<StatusBarItem, "text" | "tooltip" | "command" | "show" | "dispose">;
+
+export class StatusBar {
+  constructor(private readonly item: StatusBarItemLike) {
+    this.update(false, false, null, false);
     this.item.show();
   }
 
-  update(connected: boolean, autoFollow: boolean, trackedPath: string | null, suppressedReason?: string): void {
+  /** `hostsHerdr`: herdr runs in this window, so a click toggles auto-follow; otherwise it launches herdr. */
+  update(connected: boolean, autoFollow: boolean, trackedPath: string | null, hostsHerdr: boolean, suppressedReason?: string): void {
     const label = connected ? (trackedPath ? path.basename(trackedPath) : "connected") : "disconnected";
     this.item.text = `$(terminal) herdr: ${label}${suppressedReason ? " (not following)" : ""}`;
     const auto = suppressedReason ?? (autoFollow ? "auto-follow on" : "auto-follow off");
-    this.item.tooltip = `${trackedPath ?? "no followed folder"}\n${auto} (click to toggle)`;
+    const click = hostsHerdr ? "click to toggle auto-follow" : "click to launch herdr";
+    this.item.command = hostsHerdr ? TOGGLE_COMMAND : LAUNCH_COMMAND;
+    this.item.tooltip = `${trackedPath ?? "no followed folder"}\n${auto} (${click})`;
   }
 
   dispose(): void {

@@ -37,7 +37,7 @@ Start herdr in the integrated terminal. The window then follows the folder of wh
 
 Only the window that hosts herdr follows automatically. "Herdr: Follow Focused Pane Now" works in any window.
 
-The status bar item shows the followed folder. Click it to toggle auto-follow.
+The status bar item shows the followed folder. Click it to launch herdr in an editor tab when herdr is not running in this window, or to toggle auto-follow when it is.
 
 ## Restoring pane folders
 
@@ -53,6 +53,7 @@ A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navi
 |---|---|---|
 | `herdrNavigator.followNow` | Herdr: Follow Focused Pane Now | `Ctrl+K Ctrl+Alt+H` (`Cmd+K Cmd+Alt+H` on macOS) |
 | `herdrNavigator.toggleAutoFollow` | Herdr: Toggle Auto-Follow | none |
+| `herdrNavigator.launchHerdr` | Herdr: Launch Herdr | none |
 | `herdrNavigator.reconnect` | Herdr: Reconnect | none |
 | `herdrNavigator.showDiagnostics` | Herdr Navigator: Show Diagnostics | none |
 | `herdrNavigator.repairSessionFolders` | Herdr Navigator: Repair herdr session folders | none |

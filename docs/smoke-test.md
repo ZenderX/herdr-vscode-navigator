@@ -23,6 +23,9 @@ Manual procedure. Needs herdr 0.9.5 and two directories, `A` and `B`, that you c
 7. Run "Herdr: Toggle Auto-Follow" again, then switch herdr tabs.
    Expected: auto-follow is on and the second root follows each tab switch.
 
+   Click launch: close the herdr tab in the window, wait for the tooltip to read "click to launch herdr", then click the status bar item.
+   Expected: a new herdr tab opens in the editor area (one tab, even on a double click) and the tooltip changes to "click to toggle auto-follow".
+
 8. Quit herdr, then run "Herdr: Reconnect" after restarting it.
    Expected: the status bar shows `herdr: disconnected` while herdr is down and returns to a folder name after reconnect.
 

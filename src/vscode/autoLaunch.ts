@@ -9,7 +9,7 @@ import { planAutoLaunch, planTakeover } from "../launch/planAutoLaunch";
 import type { LaunchPlan, WindowKind } from "../launch/planAutoLaunch";
 import { readRecord, reduce } from "../launch/sessionState";
 import type { SessionEvent, SessionRecord } from "../launch/sessionState";
-import { samePath } from "../paths";
+import { normalizeCwd, samePath } from "../paths";
 
 export const SESSION_KEY = "herdrNavigator.session";
 const TERMINAL_NAME = "herdr";
@@ -75,6 +75,8 @@ export interface AutoLaunchDeps {
   migrateLegacy: () => Promise<void>;
 }
 
+export type LaunchNowResult = "launched" | "running" | "busy" | "herdr-missing";
+
 /** How a terminal closed, as far as shutdown-versus-user attribution needs. */
 export type CloseKind = "shutdown" | "user" | "other";
 
@@ -113,6 +115,7 @@ export class AutoLaunch {
   private sweepDone = false;
   private decided = false;
   private restoring = false;
+  private launching = false;
   private disposed = false;
   private shutdownSeen = false;
   private closeSinceSeen: CloseKind | "none" = "none";
@@ -391,7 +394,31 @@ export class AutoLaunch {
     const { pendingTakeoverFolder } = this.record;
     if (pendingTakeoverFolder !== undefined && deps.isNavigator()) await this.apply({ type: "takeoverConsumed" });
     if (plan.action === "none") return;
+    await this.execute(plan, terminals);
+  }
 
+  /** An explicit launch (status-bar click): skips the auto-launch rules, needs only herdr on PATH. */
+  async launchNow(): Promise<LaunchNowResult> {
+    const { deps } = this;
+    if (this.launching) return "busy";
+    this.launching = true;
+    try {
+      await deps.rescan();
+      // Undetectable hosting counts as hosting, as in auto-launch: a duplicate herdr is worse than a missed launch.
+      if (this.lastState !== "no") return "running";
+      if ((await deps.resolveHerdr()) === undefined) return "herdr-missing";
+      const { lastFolder, lastSpaceLabel } = this.record;
+      const cwd = normalizeCwd(lastFolder, deps.platform) ?? undefined;
+      this.deps.log("info", `launch: create herdr cwd=${cwd ?? "none"} focus=${lastSpaceLabel ?? "none"}`);
+      await this.execute({ action: "create", name: "herdr", command: "herdr", cwd, focusLabel: lastSpaceLabel }, []);
+      return "launched";
+    } finally {
+      this.launching = false;
+    }
+  }
+
+  private async execute(plan: Exclude<LaunchPlan, { action: "none" }>, terminals: readonly AutoLaunchTerminal[]): Promise<void> {
+    const { deps } = this;
     if (deps.repairOnLaunch()) {
       try {
         await deps.repairSession();

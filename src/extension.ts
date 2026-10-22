@@ -473,6 +473,15 @@ function registerCommands(env: CommandsEnv): vscode.Disposable[] {
       }
     }),
     vscode.commands.registerCommand("herdrNavigator.toggleAutoFollow", () => setAutoFollow(!controller.getState().autoFollow)),
+    vscode.commands.registerCommand("herdrNavigator.launchHerdr", async () => {
+      try {
+        if ((await autoLaunch.launchNow()) === "herdr-missing") {
+          void vscode.window.showErrorMessage("Herdr Navigator cannot find herdr on PATH.");
+        }
+      } catch (err: unknown) {
+        void vscode.window.showErrorMessage(`Herdr Navigator could not launch herdr: ${errorText(err)}`);
+      }
+    }),
     vscode.commands.registerCommand("herdrNavigator.repairSessionFolders", async () => {
       const outcome = await env.repair();
       void vscode.window.showInformationMessage(
@@ -503,7 +512,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const log: Logger = diagnostics.log;
   // First line of the log: a second activation line in one session marks an extension-host restart.
   log("info", `activated herdr-navigator ${String(context.extension.packageJSON.version)} at ${new Date().toISOString()}; workspace ${describeWorkspace()}`);
-  const statusBar = new StatusBar();
+  const statusBar = new StatusBar(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left));
   let settings = readSettings();
   // Path settings can name private locations: log only whether they are set.
   log("info", `settings: ${JSON.stringify({ ...settings, socketPath: settings.socketPath !== "", gitBashPath: settings.gitBashPath !== "" })}`);
@@ -644,7 +653,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const connected = connection.isConnected();
     const autoFollow = controller.getState().autoFollow;
     const suppressed = !autoFollow || consent.autoAllowed() ? undefined : consent.suppressionReason();
-    statusBar.update(connected, autoFollow, tracked, suppressed);
+    statusBar.update(connected, autoFollow, tracked, host.get() !== "no", suppressed);
     poller.start(pollIntervalMs({ connected, autoFollow, host: host.get(), confirmedHere: consent.confirmedHere(), cwdPollMs: settings.cwdPollMs }));
   }
 

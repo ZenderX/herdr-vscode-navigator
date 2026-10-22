@@ -636,6 +636,39 @@ describe("AutoLaunch space restore", () => {
   });
 });
 
+describe("AutoLaunch launchNow", () => {
+  it("creates one editor terminal that runs herdr, even when the record says the user left herdr", async () => {
+    const h = harness(record({ herdrWasRunning: false, lastFolder: "C:\\proj" }));
+    assert.equal(await h.auto.launchNow(), "launched");
+    assert.equal(h.created.length, 1);
+    assert.equal(h.created[0]?.location, EDITOR);
+    assert.deepEqual(h.createdTerminal.sent, [["herdr", true]]);
+  });
+
+  it("is a no-op while a launch is in flight", async () => {
+    const h = harness(record());
+    const release = h.holdRepair();
+    const first = h.auto.launchNow();
+    await flush();
+    assert.equal(await h.auto.launchNow(), "busy");
+    release();
+    assert.equal(await first, "launched");
+    assert.equal(h.created.length, 1);
+  });
+
+  it("creates nothing when herdr already runs in this window", async () => {
+    const h = harness(record(), { rescanState: "yes" });
+    assert.equal(await h.auto.launchNow(), "running");
+    assert.equal(h.created.length, 0);
+  });
+
+  it("reports a missing herdr without creating a terminal", async () => {
+    const h = harness(record(), { herdrPath: undefined });
+    assert.equal(await h.auto.launchNow(), "herdr-missing");
+    assert.equal(h.created.length, 0);
+  });
+});
+
 describe("AutoLaunch dispose", () => {
   it("does not record herdr-exited when disposed while the confirming rescan is pending", async () => {
     const h = harness(undefined);

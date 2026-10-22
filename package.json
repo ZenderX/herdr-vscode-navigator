@@ -50,6 +50,10 @@
         "title": "Herdr: Toggle Auto-Follow"
       },
       {
+        "command": "herdrNavigator.launchHerdr",
+        "title": "Herdr: Launch Herdr"
+      },
+      {
         "command": "herdrNavigator.reconnect",
         "title": "Herdr: Reconnect"
       },
