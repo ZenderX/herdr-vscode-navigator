@@ -514,7 +514,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const log: Logger = diagnostics.log;
   // First line of the log: a second activation line in one session marks an extension-host restart.
   log("info", `activated herdr-navigator ${String(context.extension.packageJSON.version)} at ${new Date().toISOString()}; workspace ${describeWorkspace()}`);
-  const statusBar = new StatusBar(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left));
+  const statusBar = new StatusBar(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left), (id) => new vscode.ThemeColor(id));
   let settings = readSettings();
   // Path settings can name private locations: log only whether they are set.
   log("info", `settings: ${JSON.stringify({ ...settings, socketPath: settings.socketPath !== "", gitBashPath: settings.gitBashPath !== "" })}`);

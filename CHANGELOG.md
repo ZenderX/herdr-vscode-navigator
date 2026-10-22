@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Clicking the status bar item now launches herdr in an editor-area terminal tab when herdr is not running in this window, and toggles auto-follow when it is; the tooltip names the action. New command `herdrNavigator.launchHerdr` (Herdr: Launch Herdr).
+- The status bar item now shows auto-follow state at a glance: an open eye when on, a dimmed closed eye when off.
 - After launching herdr (status bar click or auto-launch on restore) the extension now defers re-focusing the last space to the optional `zenderx.refocus-last-space` herdr plugin when it is installed and enabled (one `herdr plugin list --json` call per launch), and falls back to its own re-focus otherwise.
 - The workspace name in the navigator's title bar now shows the focused herdr space's label instead of `herdr-navigation (Workspace)`, and follows the focused space without a reload while auto-follow is on (a space rename shows at the next focus change). With the herdr terminal tab active the title reads `herdr - <space> - Visual Studio Code`; `herdr` there is the active editor, not part of the extension's value. Titles written by 0.1.x are migrated on first run; a `window.title` you set yourself in the workspace is left alone.
 - Known limit: the Explorer header still reads `NAVIGATOR (WORKSPACE)`. VS Code derives it from the saved workspace file name plus a hardcoded suffix and offers no API to change it; renaming the file to follow the space would reload the window on every space switch.

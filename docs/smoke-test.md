@@ -15,13 +15,13 @@ Manual procedure. Needs herdr 0.9.5 and two directories, `A` and `B`, that you c
    Expected: the second root changes from `A` to `B` in place within about a second; no restart, no reload, terminal still alive; the first root is unchanged.
 
 5. Switch back to `A`, then focus the editor and run "Herdr: Toggle Auto-Follow" from the Command Palette. Switch herdr to `B`.
-   Expected: auto-follow is now off; the second root stays on `A`; the status bar tooltip says auto-follow is off.
+   Expected: auto-follow is now off; the second root stays on `A`; the status bar tooltip says auto-follow is off, and the item shows a closed eye (`$(eye-closed)`) with dimmed text.
 
 6. Click into the herdr terminal so it has focus and press `Ctrl+K Ctrl+Alt+H`.
    Expected: the second root changes to `B` even though the terminal had focus and auto-follow is off; no characters reach the shell.
 
 7. Run "Herdr: Toggle Auto-Follow" again, then switch herdr tabs.
-   Expected: auto-follow is on and the second root follows each tab switch.
+   Expected: auto-follow is on, the status bar item shows an open eye in the normal colour, and the second root follows each tab switch.
 
    Click launch: close the herdr tab in the window, wait for the tooltip to read "click to launch herdr", then click the status bar item.
    Expected: a new herdr tab opens in the editor area (one tab, even on a double click) and the tooltip changes to "click to toggle auto-follow".

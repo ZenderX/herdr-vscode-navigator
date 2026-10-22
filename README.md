@@ -37,7 +37,7 @@ Start herdr in the integrated terminal. The window then follows the folder of wh
 
 Only the window that hosts herdr follows automatically. "Herdr: Follow Focused Pane Now" works in any window.
 
-The status bar item shows the followed folder. Click it to launch herdr in an editor tab when herdr is not running in this window, or to toggle auto-follow when it is.
+The status bar item shows the followed folder, with an open eye when auto-follow is on and a dimmed closed eye when it is off. Click it to launch herdr in an editor tab when herdr is not running in this window, or to toggle auto-follow when it is.
 
 ## Restoring pane folders
 
