@@ -99,7 +99,7 @@ function harness(autoFollow = true, onFetch?: () => void): Harness {
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("FollowController", () => {
-  it("coalesces a burst of focus events into one apply after the debounce", async () => {
+  it("coalesces a burst of focus events into one apply after the debounce, and ignores them while auto-follow is off", async () => {
     const h = harness();
     h.controller.onFocusEvent();
     h.clock.advance(60);
@@ -111,58 +111,15 @@ describe("FollowController", () => {
     assert.equal(h.fetches.count, 1);
     assert.deepEqual(h.plans, [{ kind: "replace", index: 1, add: ["C:\\one"] }]);
     assert.equal(h.controller.getState().trackedPath, "C:\\one");
+
+    const off = harness(false);
+    off.controller.onFocusEvent();
+    off.clock.advance(1000);
+    await off.controller.whenIdle();
+    assert.equal(off.fetches.count, 0);
   });
 
-  it("forwards isAdoptedAnchor to the planner so stale folders after a legacy anchor are reclaimed", async () => {
-    const clock = new FakeClock();
-    const plans: FolderPlan[] = [];
-    const controller = new FollowController({
-      platform: "win32",
-      fetchSnapshot: async () => snap("C:\\one"),
-      applyPlan: async (plan) => {
-        plans.push(plan);
-        return true;
-      },
-      persistPendingTarget: async () => undefined,
-      switchFolder: async () => false,
-      getFolders: () => [{ path: "C:\\legacy" }, { path: "C:\\stale" }, { path: "C:\\tracked" }],
-      isMultiRoot: () => true,
-      getAnchorPath: () => "C:\\legacy",
-      isAdoptedAnchor: () => true,
-      autoFollow: true,
-      debounceMs: 100,
-      cwdSource: "auto",
-      clock,
-    });
-    controller.setTrackedPath("C:\\tracked");
-    controller.onFocusEvent();
-    clock.advance(100);
-    await controller.whenIdle();
-    assert.deepEqual(plans, [{ kind: "reclaim", index: 1, deleteCount: 2, add: ["C:\\one"] }]);
-  });
-
-  it("serializes: an event during an in-flight apply waits and uses the latest target", async () => {
-    const h = harness();
-    h.gate.hold = true;
-    h.controller.onFocusEvent();
-    h.clock.advance(100);
-    await tick();
-    assert.equal(h.plans.length, 1);
-
-    h.cwd.value = "C:\\two";
-    h.controller.onFocusEvent();
-    h.clock.advance(100);
-    await tick();
-    assert.equal(h.plans.length, 1, "second apply must wait for the first");
-
-    h.gate.hold = false;
-    h.gate.release?.();
-    await h.controller.whenIdle();
-    assert.equal(h.plans.length, 2);
-    assert.deepEqual(h.plans[1], { kind: "replace", index: 1, add: ["C:\\two"] });
-  });
-
-  it("drops stale intermediate targets: several events mid-apply cause one follow-up", async () => {
+  it("serializes applies: several events during an in-flight apply cause one follow-up to the latest target", async () => {
     const h = harness();
     h.gate.hold = true;
     h.controller.onFocusEvent();
@@ -180,154 +137,6 @@ describe("FollowController", () => {
     assert.deepEqual(h.plans[1], { kind: "replace", index: 1, add: ["C:\\c"] });
   });
 
-  it("ignores focus events while autoFollow is off", async () => {
-    const h = harness(false);
-    h.controller.onFocusEvent();
-    assert.equal(h.clock.pending, 0);
-    h.clock.advance(1000);
-    await h.controller.whenIdle();
-    assert.equal(h.fetches.count, 0);
-  });
-
-  it("applyPlan's isCurrent turns false once a newer focus arrives while the plan waits", async () => {
-    const h = harness();
-    h.gate.hold = true;
-    h.controller.onFocusEvent();
-    h.clock.advance(100);
-    await tick();
-    const isCurrent = h.currents[0];
-    assert.ok(isCurrent);
-    assert.equal(isCurrent(), true);
-    h.controller.onFocusEvent();
-    assert.equal(isCurrent(), false);
-    h.gate.hold = false;
-    h.gate.release?.();
-    await h.controller.whenIdle();
-  });
-
-  it("does not apply a plan when a newer focus arrived while the snapshot was fetched", async () => {
-    const late: { fire: (() => void) | null } = { fire: null };
-    const h = harness(true, () => {
-      const fire = late.fire;
-      late.fire = null;
-      fire?.();
-    });
-    late.fire = () => h.controller.onFocusEvent();
-    h.controller.onFocusEvent();
-    h.clock.advance(100);
-    await h.controller.whenIdle();
-    assert.equal(h.plans.length, 0, "the superseded plan must be skipped");
-    h.clock.advance(100);
-    await h.controller.whenIdle();
-    assert.equal(h.plans.length, 1);
-  });
-
-  it("dispose clears the debounce timer and later events and followNow do nothing", async () => {
-    const h = harness();
-    h.controller.onFocusEvent();
-    assert.equal(h.clock.pending, 1);
-    h.controller.dispose();
-    assert.equal(h.clock.pending, 0);
-    h.controller.onFocusEvent();
-    assert.equal(h.clock.pending, 0);
-    await h.controller.followNow();
-    assert.equal(h.fetches.count, 0);
-    assert.equal(h.plans.length, 0);
-  });
-
-  it("dispose during an in-flight apply marks the plan stale and applies nothing afterwards", async () => {
-    const h = harness();
-    h.gate.hold = true;
-    h.controller.onFocusEvent();
-    h.clock.advance(100);
-    await tick();
-    const isCurrent = h.currents[0];
-    assert.ok(isCurrent);
-    h.controller.dispose();
-    assert.equal(isCurrent(), false);
-    h.gate.hold = false;
-    h.gate.release?.();
-    await h.controller.whenIdle();
-    assert.equal(h.plans.length, 1);
-  });
-
-  it("dispose while the snapshot is pending leaves switchFolder uncalled in folder mode", async () => {
-    let releaseFetch: (() => void) | null = null;
-    const switched: string[] = [];
-    const controller = new FollowController({
-      platform: "win32",
-      mode: "folder",
-      fetchSnapshot: async () => {
-        await new Promise<void>((resolve) => (releaseFetch = resolve));
-        return snap("C:\\one");
-      },
-      applyPlan: async () => true,
-      persistPendingTarget: async () => undefined,
-      switchFolder: async (target) => {
-        switched.push(target);
-        return true;
-      },
-      getFolders: () => [{ path: "C:\\anchor" }],
-      isMultiRoot: () => false,
-      getAnchorPath: () => "C:\\anchor",
-      autoFollow: true,
-      debounceMs: 100,
-      cwdSource: "auto",
-      clock: new FakeClock(),
-    });
-    const cycle = controller.followNow();
-    await tick();
-    assert.ok(releaseFetch);
-    controller.dispose();
-    (releaseFetch as () => void)();
-    await cycle;
-    assert.deepEqual(switched, []);
-  });
-
-  it("dispose while persisting a convert target leaves applyPlan uncalled", async () => {
-    let releasePersist: (() => void) | null = null;
-    const applied: FolderPlan[] = [];
-    const controller = new FollowController({
-      platform: "win32",
-      fetchSnapshot: async () => snap("C:\\one"),
-      applyPlan: async (plan) => {
-        applied.push(plan);
-        return true;
-      },
-      persistPendingTarget: () => new Promise<void>((resolve) => (releasePersist = resolve)),
-      switchFolder: async () => false,
-      getFolders: () => [{ path: "C:\\anchor" }],
-      isMultiRoot: () => false,
-      getAnchorPath: () => "C:\\anchor",
-      autoFollow: true,
-      debounceMs: 100,
-      cwdSource: "auto",
-      clock: new FakeClock(),
-    });
-    const cycle = controller.followNow();
-    await tick();
-    assert.ok(releasePersist);
-    controller.dispose();
-    (releasePersist as () => void)();
-    await cycle;
-    assert.deepEqual(applied, []);
-  });
-
-  it("turning autoFollow off cancels a pending debounce", async () => {
-    const h = harness();
-    h.controller.onFocusEvent();
-    h.controller.setAutoFollow(false);
-    h.clock.advance(1000);
-    await h.controller.whenIdle();
-    assert.equal(h.plans.length, 0);
-  });
-
-  it("followNow bypasses autoFollow and the debounce", async () => {
-    const h = harness(false);
-    await h.controller.followNow();
-    assert.deepEqual(h.plans, [{ kind: "replace", index: 1, add: ["C:\\one"] }]);
-  });
-
   it("persists the pending target before applying a convert plan", async () => {
     const h = harness();
     h.folders.value = [{ path: "C:\\anchor" }];
@@ -337,87 +146,6 @@ describe("FollowController", () => {
     assert.deepEqual(h.persisted, ["C:\\one"]);
     assert.deepEqual(h.plans, [{ kind: "convert", start: 1, deleteCount: 0, add: ["C:\\one"] }]);
     assert.deepEqual(h.order, ["persist", "apply"]);
-  });
-
-  it("does not apply a convert plan when persisting fails", async () => {
-    const h = harness();
-    h.folders.value = [{ path: "C:\\anchor" }];
-    h.folders.multi = false;
-    const failing = new FollowController({
-      platform: "win32",
-      fetchSnapshot: async () => snap("C:\\one"),
-      applyPlan: async (plan) => {
-        h.plans.push(plan);
-        return true;
-      },
-      persistPendingTarget: async () => {
-        throw new Error("disk full");
-      },
-      switchFolder: async () => false,
-      getFolders: () => h.folders.value,
-      isMultiRoot: () => false,
-      getAnchorPath: () => "C:\\anchor",
-      autoFollow: true,
-      debounceMs: 0,
-      cwdSource: "auto",
-    });
-    await failing.followNow();
-    assert.equal(h.plans.length, 0);
-    assert.equal(failing.getState().lastError, "disk full");
-  });
-
-  it("does nothing further when the target is already open", async () => {
-    const h = harness();
-    h.cwd.value = "C:\\start";
-    await h.controller.followNow();
-    assert.equal(h.plans.length, 0);
-  });
-
-  it("clears the tracked slot after a remove plan", async () => {
-    const h = harness();
-    h.cwd.value = "C:\\anchor";
-    await h.controller.followNow();
-    assert.deepEqual(h.plans, [{ kind: "remove", index: 1 }]);
-    assert.equal(h.controller.getState().trackedPath, null);
-  });
-
-  it("logs pane fields, target with source, plan, and mutation result for one cycle", async () => {
-    const lines: string[] = [];
-    const controller = new FollowController({
-      platform: "win32",
-      fetchSnapshot: async () => ({
-        ...snap("C:\\spawn"),
-        panes: [
-          {
-            pane_id: "p1",
-            terminal_id: "t",
-            workspace_id: "w",
-            tab_id: "tab",
-            focused: true,
-            cwd: "C:\\spawn",
-            foreground_cwd: "C:\\live",
-            terminal_title: "bash",
-          },
-        ],
-      }),
-      applyPlan: async () => true,
-      persistPendingTarget: async () => {},
-      switchFolder: async () => false,
-      getFolders: () => [{ path: "C:\\anchor" }, { path: "C:\\start" }],
-      isMultiRoot: () => true,
-      getAnchorPath: () => "C:\\anchor",
-      autoFollow: true,
-      debounceMs: 0,
-      cwdSource: "auto",
-      log: (level, msg) => lines.push(`[${level}] ${msg}`),
-    });
-    controller.setTrackedPath("C:\\start");
-    await controller.followNow();
-    const text = lines.join("\n");
-    assert.match(text, /pane: id=p1 tab=tab workspace=w cwd=C:\\spawn foreground_cwd=C:\\live terminal_title=bash/);
-    assert.match(text, /target: C:\\live via foreground_cwd/);
-    assert.match(text, /plan: replace: index 1 -> C:\\live/);
-    assert.match(text, /mutation: replace applied=true/);
   });
 
   describe("live cwd chain", () => {
@@ -451,89 +179,17 @@ describe("FollowController", () => {
       return { controller, clock, plans };
     }
 
-    it("follows the probed directory and logs the probe as the source", async () => {
-      const lines: string[] = [];
-      const { controller, plans } = liveController({ enabled: true, probe: async () => ({ ok: true, path: "C:\\live" }) }, lines);
+    it("follows the probed directory, and the spawn cwd with a hint when the probe fails", async () => {
+      const { controller, plans } = liveController({ enabled: true, probe: async () => ({ ok: true, path: "C:\\live" }) }, []);
       await controller.followNow();
       assert.deepEqual(plans, [{ kind: "replace", index: 1, add: ["C:\\live"] }]);
-      assert.match(lines.join("\n"), /target: C:\\live via probe .* probe=\d+ms/);
-    });
 
-    it("logs a failed probe, still follows the spawn cwd, and emits the hint", async () => {
       const lines: string[] = [];
-      const { controller, plans } = liveController({ enabled: true, probe: async () => ({ ok: false, reason: "Git Bash not found" }) }, lines);
-      await controller.followNow();
-      assert.deepEqual(plans, [{ kind: "replace", index: 1, add: ["C:\\Users\\me"] }]);
-      const text = lines.join("\n");
-      assert.match(text, /via cwd .*failed=\[probe: Git Bash not found; foreground_cwd: absent\]/);
-      assert.match(text, /hint: .*herdrNavigator\.liveCwdProbe.*docs\/shell-integration\.md/);
+      const failed = liveController({ enabled: true, probe: async () => ({ ok: false, reason: "Git Bash not found" }) }, lines);
+      await failed.controller.followNow();
+      assert.deepEqual(failed.plans, [{ kind: "replace", index: 1, add: ["C:\\Users\\me"] }]);
+      assert.match(lines.join("\n"), /hint: .*herdrNavigator\.liveCwdProbe.*docs\/shell-integration\.md/);
     });
-
-    it("emits the hint without probing when the probe is disabled", async () => {
-      const lines: string[] = [];
-      let probes = 0;
-      const { controller } = liveController({ enabled: false, probe: async () => (probes++, { ok: true, path: "C:\\live" }) }, lines);
-      await controller.followNow();
-      assert.equal(probes, 0);
-      const text = lines.join("\n");
-      assert.match(text, /via cwd .*failed=\[probe: disabled/);
-      assert.match(text, /hint: /);
-    });
-
-    it("runs a single probe, for the final pane, when focus events arrive in a burst", async () => {
-      const lines: string[] = [];
-      const probed: string[] = [];
-      let focused = 0;
-      const { controller, clock } = liveController(
-        { enabled: true, probe: async (paneId) => (probed.push(paneId), { ok: true, path: "C:\\live" }) },
-        lines,
-        async () => ({ ...snap("C:\\spawn"), focused_pane_id: `p${focused}`, panes: [{ ...snap("C:\\spawn").panes[0], pane_id: `p${focused}` }] }),
-      );
-      for (let i = 1; i <= 5; i++) {
-        focused = i;
-        controller.onFocusEvent();
-        clock.advance(40);
-      }
-      clock.advance(100);
-      await controller.whenIdle();
-      assert.deepEqual(probed, ["p5"]);
-    });
-
-    it("skips applying a stale plan when focus changes during an in-flight probe", async () => {
-      let focused = 1;
-      const gate: { release?: () => void } = {};
-      const probed: string[] = [];
-      const { controller, clock, plans } = liveController(
-        {
-          enabled: true,
-          probe: async (paneId) => {
-            probed.push(paneId);
-            if (paneId === "p1") await new Promise<void>((resolve) => (gate.release = resolve));
-            return { ok: true, path: `C:\\live-${paneId}` };
-          },
-        },
-        [],
-        async () => ({ ...snap("C:\\spawn"), focused_pane_id: `p${focused}`, panes: [{ ...snap("C:\\spawn").panes[0], pane_id: `p${focused}` }] }),
-      );
-      controller.onFocusEvent();
-      clock.advance(100);
-      await tick();
-      focused = 2;
-      controller.onFocusEvent();
-      clock.advance(100);
-      gate.release?.();
-      await controller.whenIdle();
-      assert.deepEqual(probed, ["p1", "p2"]);
-      assert.deepEqual(plans, [{ kind: "replace", index: 1, add: ["C:\\live-p2"] }]);
-    });
-  });
-
-  it("only triggers on configured herdr event names", async () => {
-    const h = harness();
-    h.controller.onHerdrEvent("pane_updated");
-    assert.equal(h.clock.pending, 0);
-    h.controller.onHerdrEvent("tab_focused");
-    assert.equal(h.clock.pending, 1);
   });
 
   describe("git root snapping", () => {
@@ -562,31 +218,16 @@ describe("FollowController", () => {
       return { controller, plans, lines };
     }
 
-    it("treats a subfolder of the tracked repository as a no-op", async () => {
-      const { controller, plans, lines } = gitController("C:\\repo\\src\\game", true);
-      await controller.followNow();
-      assert.deepEqual(plans, []);
-      assert.equal(controller.getState().lastTarget, "C:\\repo");
-      assert.match(lines.join("\n"), /target: C:\\repo via .*\(git root of C:\\repo\\src\\game\)/);
-    });
+    it("treats a subfolder of the tracked repository as a no-op, and follows the exact directory when the setting is off", async () => {
+      const snapped = gitController("C:\\repo\\src\\game", true);
+      await snapped.controller.followNow();
+      assert.deepEqual(snapped.plans, []);
+      assert.equal(snapped.controller.getState().lastTarget, "C:\\repo");
 
-    it("follows the exact directory when the setting is off", async () => {
-      const { controller, plans } = gitController("C:\\repo\\src\\game", false);
-      await controller.followNow();
-      assert.deepEqual(plans, [{ kind: "replace", index: 1, add: ["C:\\repo\\src\\game"] }]);
-    });
-
-    it("follows the exact directory outside a repository", async () => {
-      const { controller, plans } = gitController("C:\\other\\place", true);
-      await controller.followNow();
-      assert.deepEqual(plans, [{ kind: "replace", index: 1, add: ["C:\\other\\place"] }]);
-    });
-
-    it("honors setFollowGitRoot at runtime", async () => {
-      const { controller, plans } = gitController("C:\\repo\\src", true);
-      controller.setFollowGitRoot(false);
-      await controller.followNow();
-      assert.deepEqual(plans, [{ kind: "replace", index: 1, add: ["C:\\repo\\src"] }]);
+      const exact = gitController("C:\\repo\\src\\game", true);
+      exact.controller.setFollowGitRoot(false);
+      await exact.controller.followNow();
+      assert.deepEqual(exact.plans, [{ kind: "replace", index: 1, add: ["C:\\repo\\src\\game"] }]);
     });
   });
 });

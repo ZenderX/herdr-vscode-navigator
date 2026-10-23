@@ -5,6 +5,10 @@ export const TOGGLE_COMMAND = "herdrNavigator.toggleAutoFollow";
 export const LAUNCH_COMMAND = "herdrNavigator.launchHerdr";
 export const INSTALL_COMMAND = "herdrNavigator.openHerdrInstall";
 
+// Left-aligned; no integer lies between the two, so no default- or integer-priority item can land between them.
+export const MAIN_ITEM_PRIORITY = 0.75;
+export const PLUGIN_HINT_PRIORITY = 0.25;
+
 /** The slice of vscode.StatusBarItem this module touches. */
 export type StatusBarItemLike = Pick<StatusBarItem, "text" | "tooltip" | "command" | "color" | "show" | "dispose">;
 

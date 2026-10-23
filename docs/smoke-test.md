@@ -46,11 +46,12 @@ Install the packaged VSIX and run it in a normal window; never press F5 for thes
 Use the installed VSIX in a normal window, not F5. Do not pass `--yes` to any install by hand.
 
 1. Plugin hint. With herdr on PATH and the plugin absent or disabled (`herdr plugin list`), reload the window.
-   Expected: a small second status bar item appears next to the main one, with a tooltip naming the optional herdr plugin. No notification or dialog appears on its own.
+   Expected: a small second status bar item (plug icon) appears immediately to the right of the herdr status bar item (the auto-follow toggle), with no other item between them, with a tooltip naming the optional herdr plugin. No notification or dialog appears on its own.
 2. Click the hint.
    Expected: a message of one or two sentences explains the plugin, with the buttons Install, Learn more and a hide-for-good choice. Learn more opens `https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md` and the hint stays.
 3. Choose Install.
    Expected: a visible terminal opens and runs `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`, then waits for you to confirm herdr's preview. Nothing installs until you confirm.
+   Precondition: the default branch of the public repo `ZenderX/herdr-vscode-navigator` must contain `plugin/` (it ships with the next release publish). Until then herdr fails with `The system cannot find the file specified. (os error 2)`.
 4. Confirm the install, then close the terminal.
    Expected: the hint disappears. Repeat with the plugin disabled and the same steps; declining and closing the terminal leaves the hint visible.
 5. Hide for good. Make the plugin absent again, click the hint and choose the hide option, then run "Developer: Reload Window".
@@ -83,23 +84,6 @@ Paste back these output channel lines:
 - `auto-launch: record herdrWasRunning=` lines and `hosting herdr:` lines.
 - `window title:` lines.
 - Whether herdr restored its own session or started fresh.
-
-## Session folder repair (isolated)
-
-Steps 1 to 3 run against a scratch herdr session, never your live one. `scripts/session-restore-probe/repair-e2e.mjs` automates it.
-
-Warnings:
-
-- Pass `--session <scratch-name>` on every herdr command, including the stop command: `herdr session stop <scratch-name>`. A bare `herdr server stop` stops the live server.
-- The `HERDR_SESSION` environment variable does not isolate herdr's `workspace`, `pane` and `api` CLI commands; they hit the live session unless `--session` is passed.
-- The extension skips named sessions, so this procedure checks herdr's restore behaviour and the file edit, not the extension's own trigger.
-
-1. Start the scratch session: `herdr --session scratch` in a terminal. Create a workspace, `cd C:\Users\me\proj` (or `/home/me/proj`) in its pane.
-2. Stop it: `herdr session stop scratch`. When done, clean up with `herdr session delete scratch`.
-3. Start it again with `herdr --session scratch`.
-   Expected (the bug): the pane is back in the folder it was spawned in, not `proj`.
-4. This step runs on the default session and stops your real herdr server; only do it when nothing in it needs to survive. For the extension itself, use a normal window with a disposable workspace: let the navigator host herdr, `cd` in a pane, stop herdr, then run "Herdr Navigator: Repair herdr session folders" and relaunch.
-   Expected: the pane restores in the folder you `cd`'d to; the output channel lists the changes; a backup exists in the extension's global storage (newest five kept). Setting `herdrNavigator.repairSessionOnLaunch` to `false` and repeating restores herdr's own behaviour.
 
 ## Open in VS Code
 
@@ -143,7 +127,7 @@ Isolated: a scratch herdr session, a scratch home and a scratch state directory.
 
 ## Saved navigator workspace and the jump list
 
-`scripts/jump-list-repro/run.ps1` runs scenarios A to D in an isolated VS Code (see its README); these are the manual equivalents. Needs herdr on PATH and the installed VSIX in a normal window, not F5. The navigator workspace is `navigator.code-workspace` in the extension's global storage, in the `anchor` folder.
+Manual checks only; no script automates these scenarios. Needs herdr on PATH and the installed VSIX in a normal window, not F5. The navigator workspace is `navigator.code-workspace` in the extension's global storage, in the `anchor` folder.
 
 1. Manual start (E). Open a folder `A` as a plain window with no earlier navigator session. Start `herdr` in its terminal with the focused pane in another directory `C`.
    Expected: log `auto-launch: convert-hosting folder=C`, one window reload, then the title shows the navigator and the log has `auto-launch: create herdr` (or `reuse`) with focus on `C`; the window's workspace file is `navigator.code-workspace` with folders `[anchor, C]`. Check `pending: reconciled after restart` appears (the pending takeover survived the reload).

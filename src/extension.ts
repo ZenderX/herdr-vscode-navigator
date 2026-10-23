@@ -1,6 +1,5 @@
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { connect } from "node:net";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import * as vscode from "vscode";
 import { createLiveCwdProbe } from "./cwd/liveCwd";
@@ -19,7 +18,6 @@ import {
   switchFolder,
 } from "./follow";
 import type { FolderPlan, PendingTarget } from "./follow";
-import { findGitRoot } from "./follow/gitRoot";
 import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, SessionSnapshot } from "./herdr";
 import { HerdrPresence, handleNotInstalledClick, showsNotInstalled } from "./launch/herdrPresence";
@@ -29,17 +27,12 @@ import { PENDING_TAKEOVER_MAX_MS } from "./launch/planAutoLaunch";
 import type { WindowKind } from "./launch/planAutoLaunch";
 import { readRecord } from "./launch/sessionState";
 import { detectRefocusPlugin } from "./launch/pluginDetect";
+import { TIMEOUT_PROBE, classifyConnectError } from "./launch/serverProbe";
+import type { ServerProbe } from "./launch/serverProbe";
 import { resolveOnPath } from "./launch/whichHerdr";
 import { DIAGNOSTIC_TOPICS, channelWriter, createLog, errorText } from "./log";
 import type { DiagnosticLog } from "./log";
 import { samePath } from "./paths";
-import { isDefaultSessionSocket } from "./restore/defaultSocket";
-import { TIMEOUT_PROBE, classifyConnectError } from "./restore/serverProbe";
-import type { ServerProbe } from "./restore/serverProbe";
-import { ManifestRecorder, ManifestStore, parseManifest } from "./restore/recorder";
-import { repairSessionFolders } from "./restore/repair";
-import type { RepairOutcome } from "./restore/repair";
-import { resolveSessionFilePath } from "./restore/sessionFile";
 import { withTimeout } from "./hosting";
 import { resolveAnchor } from "./vscode/anchor";
 import { AutoLaunch, SESSION_KEY, sessionMemento } from "./vscode/autoLaunch";
@@ -53,7 +46,7 @@ import { selectAnchor } from "./vscode/anchorPath";
 import type { AnchorChoice } from "./vscode/anchorPath";
 import { affectsSettings, readSettings, setAutoFollow } from "./vscode/settings";
 import type { Settings } from "./vscode/settings";
-import { LAUNCH_COMMAND, StatusBar, TOGGLE_COMMAND } from "./vscode/statusBar";
+import { LAUNCH_COMMAND, MAIN_ITEM_PRIORITY, PLUGIN_HINT_PRIORITY, StatusBar, TOGGLE_COMMAND } from "./vscode/statusBar";
 import { createWindowTitleSync, focusedLabel } from "./vscode/windowTitle";
 import {
   convertToNavigatorWorkspace,
@@ -69,13 +62,7 @@ const LEASE_FILE = "navigator-lease.json";
 const MIGRATION_NOTICE =
   "Herdr Navigator is moving its workspace into a file so VS Code stops restoring a stray extra window. VS Code will ask once whether to save the old untitled workspace; choose Don't Save.";
 const MIGRATION_CONFIRM = "Continue";
-const MANIFEST_FILE = "restore-manifest.json";
-const MANIFEST_DEBOUNCE_MS = 5_000;
 const REACHABLE_TIMEOUT_MS = 500;
-// Catches a cd in a pane the follow cycle is not looking at; the follow cycle's own snapshots are recorded too.
-const MANIFEST_POLL_MS = 10_000;
-// A controller probe this recent is the reading for the same snapshot; the recorder reuses it instead of spawning another shell probe.
-const PROBE_REUSE_MS = 3_000;
 const PENDING_KEY = "herdrNavigator.pending";
 const TRACKED_KEY = "herdrNavigator.tracked";
 const LAST_FOLLOWED_KEY = "herdrNavigator.lastFollowed";
@@ -112,69 +99,6 @@ function hasGitEntry(dir: string): Promise<boolean> {
   );
 }
 
-interface RecorderEnv {
-  context: vscode.ExtensionContext;
-  platform: NodeJS.Platform;
-  log: Logger;
-  settings: () => Settings;
-  isHosting: () => boolean;
-  socketName: () => string;
-  /** The controller's probe instance, so one cycle spawns one shell probe per pane. */
-  probe: LiveCwdProbe;
-}
-
-// Only the hosting window records; undefined when herdr's session file layout is not supported here or the client talks to another server.
-async function createRecorder(env: RecorderEnv): Promise<ManifestRecorder | undefined> {
-  const { context, platform, log, probe } = env;
-  const located = resolveSessionFilePath(platform, { get: (name) => process.env[name], homeDir: homedir });
-  if (located.kind === "unsupported") {
-    log("info", `restore manifest: not recording (${located.reason})`);
-    return undefined;
-  }
-  // session.json is the default session's file; another server's folders must not be joined against it.
-  let socket: string;
-  try {
-    socket = env.socketName();
-  } catch (err: unknown) {
-    log("info", `restore manifest: not recording (${errorText(err)})`);
-    return undefined;
-  }
-  if (!isDefaultSessionSocket(located.path, socket, platform)) {
-    log("info", "restore manifest: not recording (the socket is not the default session's)");
-    return undefined;
-  }
-  const dir = context.globalStorageUri.fsPath;
-  const path = join(dir, MANIFEST_FILE);
-  const initial = parseManifest(await readFile(path, "utf8").catch(() => ""));
-  const store = new ManifestStore({
-    path,
-    dir,
-    fs: { mkdir: (target) => mkdir(target, { recursive: true }).then(() => undefined), writeFile: (target, text) => writeFile(target, text, "utf8"), rename },
-    clock: { now: () => Date.now(), ...timers },
-    debounceMs: MANIFEST_DEBOUNCE_MS,
-    log,
-  });
-  context.subscriptions.push({ dispose: () => store.dispose() });
-  return new ManifestRecorder({
-    platform,
-    sessionFilePath: located.path,
-    fs: { stat, readFile: (target) => readFile(target, "utf8") },
-    store,
-    ...(initial === undefined ? {} : { initial }),
-    isHosting: env.isHosting,
-    isDefaultSocket: (socketName) => isDefaultSessionSocket(located.path, socketName, platform),
-    probeLive: async (paneId) => {
-      const { liveCwdProbe, gitBashPath } = env.settings();
-      if (!liveCwdProbe) return undefined;
-      const result = await probe.probe(paneId, { enabled: true, gitBashPath }, PROBE_REUSE_MS);
-      return result.ok ? result.path : undefined;
-    },
-    gitRoot: (dir) => (env.settings().followGitRoot ? findGitRoot(dir, { hasGitEntry, platform }) : Promise.resolve(dir)),
-    now: () => new Date(),
-    log,
-  });
-}
-
 // Only a completed connect proves a server; only a missing socket proves none. A busy pipe or a timeout is doubt.
 function probeSocket(pipeName: string, timeoutMs: number, platform: NodeJS.Platform): Promise<ServerProbe> {
   return new Promise((resolve) => {
@@ -188,29 +112,6 @@ function probeSocket(pipeName: string, timeoutMs: number, platform: NodeJS.Platf
     socket.once("connect", () => done({ state: "running" }));
     socket.once("error", (err: NodeJS.ErrnoException) => done(classifyConnectError(err.code, platform)));
   });
-}
-
-function createRepairRunner(context: vscode.ExtensionContext, platform: NodeJS.Platform, log: Logger, socketName: () => string): () => Promise<RepairOutcome> {
-  const storage = context.globalStorageUri.fsPath;
-  return () =>
-    repairSessionFolders({
-      platform,
-      locate: () => resolveSessionFilePath(platform, { get: (name) => process.env[name], homeDir: homedir }),
-      socketName,
-      probeServer: (name) => probeSocket(name, REACHABLE_TIMEOUT_MS, platform),
-      fs: {
-        readFile: (path) => readFile(path, "utf8"),
-        writeFile: (path, text) => writeFile(path, text, "utf8"),
-        rename,
-        mkdir: (dir) => mkdir(dir, { recursive: true }).then(() => undefined),
-        readdir: (dir) => readdir(dir),
-        rm: (path) => rm(path, { force: true }),
-      },
-      manifestPath: join(storage, MANIFEST_FILE),
-      backupDir: join(storage, "herdr-session-backups"),
-      now: () => new Date(),
-      log,
-    });
 }
 
 function createTitleRefresher(context: vscode.ExtensionContext, platform: NodeJS.Platform, log: Logger, isNavigatorWindow: () => boolean): (label?: string) => void {
@@ -255,8 +156,8 @@ interface AutoLaunchEnv {
   chosenAnchor: () => AnchorChoice;
   requestHosting: (force?: boolean) => Promise<void>;
   newClient: () => HerdrClient;
-  repair: () => Promise<RepairOutcome>;
   socketName: () => string;
+  launchId: string;
 }
 
 function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
@@ -275,8 +176,6 @@ function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
     editorLocation: vscode.TerminalLocation.Editor,
     resolveHerdr: () => resolveOnPath("herdr", process.platform, process.env),
     detectPlugin: (herdrPath) => detectRefocusPlugin(nodeProbeDeps().execFile, herdrPath),
-    repairOnLaunch: () => vscode.workspace.getConfiguration("herdrNavigator").get<boolean>("repairSessionOnLaunch", true),
-    repairSession: () => env.repair().then(() => undefined),
     terminalHostsHerdr: async (terminal) => {
       // detectHosting reads a terminal without a shell pid as "no", which proves nothing here.
       try {
@@ -298,7 +197,7 @@ function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
     recheck: () => env.requestHosting(),
     exitReasons: { shutdown: vscode.TerminalExitReason.Shutdown, user: vscode.TerminalExitReason.User },
     client: env.newClient,
-    launchId: launchId(log),
+    launchId: env.launchId,
     windowKind: env.windowKind,
     windowFolder,
     lease: {
@@ -474,7 +373,6 @@ interface CommandsEnv {
   autoLaunch: AutoLaunch;
   requestHosting: (force?: boolean) => Promise<void>;
   refreshStatus: () => void;
-  repair: () => Promise<RepairOutcome>;
   presence: HerdrPresence;
   pluginHint: PluginHint;
   host: ReturnType<typeof createHostState>;
@@ -535,14 +433,6 @@ function registerCommands(env: CommandsEnv): vscode.Disposable[] {
         void vscode.window.showErrorMessage(`Herdr Navigator could not launch herdr: ${errorText(err)}`);
       }
     }),
-    vscode.commands.registerCommand("herdrNavigator.repairSessionFolders", async () => {
-      const outcome = await env.repair();
-      void vscode.window.showInformationMessage(
-        outcome.kind === "repaired"
-          ? `Repaired ${outcome.changes.length} folder entries in herdr's session file; a backup is in the extension's storage.`
-          : `Left herdr's session file alone: ${outcome.reason}`,
-      );
-    }),
     vscode.commands.registerCommand("herdrNavigator.reconnect", () => {
       void consent.reset();
       void requestHosting(true);
@@ -567,7 +457,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(vscode.window.registerUriHandler(createUriHandler(log)));
   // First line of the log: a second activation line in one session marks an extension-host restart.
   log("info", `activated herdr-navigator ${String(context.extension.packageJSON.version)} at ${new Date().toISOString()}; workspace ${describeWorkspace()}`);
-  const statusBar = new StatusBar(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left), (id) => new vscode.ThemeColor(id));
+  const statusBar = new StatusBar(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, MAIN_ITEM_PRIORITY), (id) => new vscode.ThemeColor(id));
   let settings = readSettings();
   // Path settings can name private locations: log only whether they are set.
   log("info", `settings: ${JSON.stringify({ ...settings, socketPath: settings.socketPath !== "", gitBashPath: settings.gitBashPath !== "" })}`);
@@ -595,18 +485,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // A fresh client per call: the socket path setting can change at runtime.
   const newClient = (pipeName = socketName()): HerdrClient => new HerdrClient({ pipeName, log });
   const warnAutoLaunch = (err: unknown): void => log("warn", `auto-launch: ${errorText(err)}`);
-  // The recorder must judge a snapshot by the socket it came from, not the setting's value when it is observed.
-  const snapshotSockets = new WeakMap<SessionSnapshot, string>();
-  const fetchSnapshot = async (): Promise<SessionSnapshot> => {
-    const pipeName = socketName();
-    const snapshot = await newClient(pipeName).snapshot();
-    snapshotSockets.set(snapshot, pipeName);
-    return snapshot;
-  };
-  const record = (recorder: ManifestRecorder | undefined, snapshot: SessionSnapshot): Promise<void> => {
-    const socket = snapshotSockets.get(snapshot);
-    return recorder === undefined || socket === undefined ? Promise.resolve() : recorder.observe(snapshot, socket);
-  };
+  const fetchSnapshot = (): Promise<SessionSnapshot> => newClient().snapshot();
 
   // Every hosting result is published here; lazy checks reuse a result for 30 s (yes/no) or 5 s (unknown); terminal events and command starts force a scan.
   const hostingMonitor = new HostingMonitor<vscode.Terminal>({
@@ -637,8 +516,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     log,
   });
   context.globalState.setKeysForSync([PLUGIN_HINT_DISMISSED_KEY]);
-  // Lower priority than the main item, so it sits to its right.
-  const hintItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, -1);
+  // Just below the main item's priority with no integer between, so it sits directly right of the auto-follow toggle.
+  const hintItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, PLUGIN_HINT_PRIORITY);
   hintItem.text = "$(plug)";
   hintItem.tooltip = "Optional herdr plugin: re-focus your last space after a crash or reboot (click for details)";
   hintItem.command = "herdrNavigator.pluginHint";
@@ -649,9 +528,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     setDismissed: () => Promise.resolve(context.globalState.update(PLUGIN_HINT_DISMISSED_KEY, true)),
     setVisible: (visible) => (visible ? hintItem.show() : hintItem.hide()),
   });
-  const repair = createRepairRunner(context, platform, log, socketName);
+  const launch = launchId(log);
   const autoLaunch = createAutoLaunch({
-    repair,
+    launchId: launch,
     context,
     platform,
     log,
@@ -675,7 +554,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const probeDeps = nodeProbeDeps(log);
   const liveProbe = createLiveCwdProbe({ processInfo: (paneId) => newClient().processInfo(paneId) }, probeDeps);
-  const recorder = await createRecorder({ context, platform, log, settings: () => settings, isHosting: () => host.get() === "yes", socketName, probe: liveProbe });
   const controller = createController({
     liveProbe,
     probePlatform: probeDeps.platform,
@@ -693,7 +571,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshStatus: (tracked) => refreshStatus(tracked),
     onSnapshot: (snapshot) => {
       poller.observe(snapshot);
-      void record(recorder, snapshot);
       void autoLaunch.observeSnapshot(snapshot).catch(warnAutoLaunch);
       refreshWindowTitle(focusedLabel(snapshot));
     },
@@ -760,17 +637,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     clearTimer: timers.clearTimeout,
   });
 
-  const recordTimer = setInterval(() => {
-    if (!recorder || host.get() !== "yes" || !connection.isConnected()) return;
-    fetchSnapshot()
-      .then((snapshot) => record(recorder, snapshot))
-      .catch((err: unknown) => log("warn", `restore manifest: ${errorText(err)}`));
-  }, MANIFEST_POLL_MS);
-
   // Disposal runs in push order, so the output channel goes last and teardown can still log.
   context.subscriptions.push(
     { dispose: commandStart.cancel },
-    { dispose: () => clearInterval(recordTimer) },
     vscode.window.onDidStartTerminalShellExecution(commandStart.onCommandStart),
     statusBar,
     { dispose: connection.stop },
@@ -781,7 +650,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => presence.dispose() },
     { dispose: () => pluginHint.dispose() },
     hintItem,
-    ...registerCommands({ output, diagnostics, controller, consent, connection, autoLaunch, requestHosting, refreshStatus, repair, presence, pluginHint, host }),
+    ...registerCommands({ output, diagnostics, controller, consent, connection, autoLaunch, requestHosting, refreshStatus, presence, pluginHint, host }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       refreshStatus();
       refreshWindowTitle();

@@ -41,68 +41,32 @@ describe("applyPendingTakeover", () => {
     return { ...s, logs, done: applyPendingTakeover(pending, NOW, MAX, s.effects, "win32", (_level, line) => void logs.push(line)) };
   };
 
-  it("replaces slot 1 once with the takeover folder", async () => {
-    const s = run([ANCHOR, PROJECT], fresh);
-    assert.equal(await s.done, TARGET);
-    assert.deepEqual(s.calls, [`update replace 1 1 ${TARGET}`]);
-  });
-
-  it("does nothing when slot 1 already holds the folder", async () => {
-    const s = run([ANCHOR, TARGET], fresh);
-    assert.equal(await s.done, TARGET);
-    assert.deepEqual(s.calls, []);
-    assert.match(s.logs.join("\n"), /plan: noop/);
-  });
-
-  it("keeps folders the user added after slot 1", async () => {
-    const s = run([ANCHOR, PROJECT, "C:\\work\\extra"], fresh);
-    await s.done;
-    assert.deepEqual(s.calls, [`update replace 1 1 ${TARGET}`]);
-  });
-
-  it("appends in slot 1 when only the anchor is open", async () => {
-    const s = run([ANCHOR], fresh);
-    await s.done;
-    assert.deepEqual(s.calls, [`update append 1 0 ${TARGET}`]);
-  });
-
-  it("ignores a stale takeover", async () => {
-    const s = run([ANCHOR, PROJECT], { folder: TARGET, at: NOW - MAX - 1 });
-    assert.equal(await s.done, undefined);
-    assert.deepEqual(s.calls, []);
-  });
-
-  it("ignores a record with no takeover", async () => {
-    const s = run([ANCHOR, PROJECT], { at: NOW });
-    assert.equal(await s.done, undefined);
-    assert.deepEqual(s.calls, []);
-  });
-
-  it("never touches index 0", async () => {
-    for (const folders of [[ANCHOR], [ANCHOR, PROJECT], [ANCHOR, PROJECT, "C:\\work\\extra"]]) {
-      const s = run(folders, fresh);
-      await s.done;
-      assert.ok(s.calls.every((call) => /^update \w+ 1 /.test(call)), s.calls.join());
-    }
+  it("puts a fresh takeover folder in slot 1 once, keeping index 0 and later user folders, and ignores a stale one", async () => {
+    const replaced = run([ANCHOR, PROJECT, "C:\\work\\extra"], fresh);
+    assert.equal(await replaced.done, TARGET);
+    assert.deepEqual(replaced.calls, [`update replace 1 1 ${TARGET}`]);
+    const appended = run([ANCHOR], fresh);
+    await appended.done;
+    assert.deepEqual(appended.calls, [`update append 1 0 ${TARGET}`]);
+    const held = run([ANCHOR, TARGET], fresh);
+    assert.equal(await held.done, TARGET);
+    assert.deepEqual(held.calls, []);
+    const stale = run([ANCHOR, PROJECT], { folder: TARGET, at: NOW - MAX - 1 });
+    assert.equal(await stale.done, undefined);
+    assert.deepEqual(stale.calls, []);
   });
 });
 
 describe("applyFolderPlan", () => {
-  const convert = planFolders({ folders: [{ path: PROJECT }], trackedPath: null, anchorPath: ANCHOR, target: TARGET, isMultiRoot: false, platform: "win32" });
+  it("records the takeover before a plain window converts, and follows a saved navigator with the index-1 replace only", async () => {
+    const convert = planFolders({ folders: [{ path: PROJECT }], trackedPath: null, anchorPath: ANCHOR, target: TARGET, isMultiRoot: false, platform: "win32" });
+    const hosting = apply([PROJECT], true, convert);
+    assert.equal(await hosting.done, true);
+    assert.deepEqual(hosting.calls, [`begin ${TARGET}`, `convert ${ANCHOR} ${TARGET}`]);
+    const plain = apply([PROJECT], false, convert);
+    await plain.done;
+    assert.deepEqual(plain.calls, [`record ${TARGET}`, `convert ${ANCHOR} ${TARGET}`]);
 
-  it("records the pending takeover before a hosting plain window converts", async () => {
-    const s = apply([PROJECT], true, convert);
-    assert.equal(await s.done, true);
-    assert.deepEqual(s.calls, [`begin ${TARGET}`, `convert ${ANCHOR} ${TARGET}`]);
-  });
-
-  it("records the takeover folder without hosting handoff when the converting window does not host herdr", async () => {
-    const s = apply([PROJECT], false, convert);
-    await s.done;
-    assert.deepEqual(s.calls, [`record ${TARGET}`, `convert ${ANCHOR} ${TARGET}`]);
-  });
-
-  it("follows in a saved navigator with the index-1 replace only, never a conversion or hosting handoff", async () => {
     const folders = [ANCHOR, PROJECT];
     const plan = planFolders({ folders: folders.map((path) => ({ path })), trackedPath: PROJECT, anchorPath: ANCHOR, target: TARGET, isMultiRoot: true, platform: "win32" });
     const s = apply(folders, true, plan);

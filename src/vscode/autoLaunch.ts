@@ -62,10 +62,6 @@ export interface AutoLaunchDeps {
   resolveHerdr: () => Promise<string | undefined>;
   /** Whether the companion re-focus plugin is installed and enabled; never rejects. */
   detectPlugin: (herdrPath: string) => Promise<PluginState>;
-  /** Whether herdr's session folders are repaired just before herdr is typed. */
-  repairOnLaunch: () => boolean;
-  /** Repairs herdr's session file; never rejects the launch, and is awaited so the write completes first. */
-  repairSession: () => Promise<void>;
   /** Whether a herdr server answers on the socket; false when stopped or in doubt. Never rejects. */
   serverRunning: () => Promise<boolean>;
   /** Forces a hosting scan that ends in onHosting. */
@@ -495,15 +491,8 @@ export class AutoLaunch {
 
   private async execute(plan: Exclude<LaunchPlan, { action: "none" }>, terminals: readonly AutoLaunchTerminal[], herdrPath: string): Promise<void> {
     const { deps } = this;
-    // Only a remembered-label re-focus can be left to the plugin; started now so it overlaps repair and terminal creation, once per launch, never on a poll.
+    // Only a remembered-label re-focus can be left to the plugin; started now so it overlaps terminal creation, once per launch, never on a poll.
     const pluginState = plan.focusLabel !== undefined && plan.focusFolder === undefined ? deps.detectPlugin(herdrPath) : undefined;
-    if (deps.repairOnLaunch()) {
-      try {
-        await deps.repairSession();
-      } catch (err: unknown) {
-        deps.log("warn", `auto-launch: session repair failed: ${errorText(err)}`);
-      }
-    }
     if (plan.action === "reuse") {
       const terminal = terminals[plan.terminalIndex];
       if (!terminal) return;

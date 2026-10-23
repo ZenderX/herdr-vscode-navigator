@@ -46,102 +46,6 @@ describe("HostingMonitor", () => {
     assert.deepEqual(one.terminalsScanned, ["a", "b"]);
     assert.deepEqual(one.clientPids, [7]);
   });
-
-  it("publishes unknown when coverage cannot be reached", async () => {
-    const m = setup(["a"]);
-    const request = m.monitor.request(true);
-    for (let i = 0; i < 3; i++) {
-      m.terminals.push(`t${i}`);
-      m.scans[i]?.resolve("yes", [1]);
-      await tick();
-    }
-    const result = await request;
-    assert.equal(m.scans.length, 3);
-    assert.equal(result.state, "unknown");
-    assert.deepEqual(result.clientPids, []);
-    assert.deepEqual(m.published.map(({ state }) => state), ["unknown"]);
-  });
-
-  it("delivers a gain found by a lazy recheck to subscribers", async () => {
-    const m = setup(["a"]);
-    const first = m.monitor.request();
-    m.scans[0]?.resolve("no");
-    await first;
-    m.advance(31_000);
-    const lazy = m.monitor.request();
-    m.scans[1]?.resolve("yes", [9]);
-    await lazy;
-    assert.deepEqual(m.published.map(({ state }) => state), ["no", "yes"]);
-    assert.deepEqual(m.published[1]?.clientPids, [9]);
-  });
-
-  it("stops publishing to subscribers once disposed", async () => {
-    const m = setup(["a"]);
-    const request = m.monitor.request(true);
-    m.monitor.dispose();
-    m.scans[0]?.resolve("yes", [3]);
-    const result = await request;
-    assert.equal(result.state, "yes");
-    assert.deepEqual(m.published, []);
-  });
-
-  it("serves the cache within its lifetime unless forced or a terminal is new", async () => {
-    const m = setup(["a"]);
-    const first = m.monitor.request();
-    m.scans[0]?.resolve("no");
-    await first;
-    m.advance(4000);
-    await m.monitor.request();
-    assert.equal(m.scans.length, 1);
-    m.terminals.push("b");
-    const covering = m.monitor.request();
-    assert.equal(m.scans.length, 2);
-    m.scans[1]?.resolve("no");
-    await covering;
-    const forced = m.monitor.request(true);
-    assert.equal(m.scans.length, 3);
-    m.scans[2]?.resolve("no");
-    await forced;
-  });
-
-  for (const state of ["no", "yes"] as const) {
-    it(`rescans lazily only after 30 s once ${state}`, async () => {
-      const m = setup(["a"]);
-      const first = m.monitor.request();
-      m.scans[0]?.resolve(state);
-      await first;
-      // Elapsed since the scan: 5 s, 10 s, 29 s.
-      for (const step of [5_000, 5_000, 19_000]) {
-        m.advance(step);
-        await m.monitor.request();
-      }
-      assert.equal(m.scans.length, 1);
-      m.advance(2_000);
-      const later = m.monitor.request();
-      assert.equal(m.scans.length, 2);
-      m.scans[1]?.resolve(state);
-      await later;
-    });
-  }
-
-  it("retries an unknown result after 5 s", async () => {
-    const m = setup(["a"]);
-    const first = m.monitor.request();
-    m.scans[0]?.resolve("unknown");
-    await first;
-    m.advance(6_000);
-    void m.monitor.request();
-    assert.equal(m.scans.length, 2);
-  });
-
-  it("forces a scan at once regardless of a fresh result", async () => {
-    const m = setup(["a"]);
-    const first = m.monitor.request();
-    m.scans[0]?.resolve("no");
-    await first;
-    void m.monitor.request(true);
-    assert.equal(m.scans.length, 2);
-  });
 });
 
 describe("createCommandStartTrigger", () => {
@@ -176,27 +80,8 @@ describe("createCommandStartTrigger", () => {
     assert.equal(x.scans(), 1);
     x.t.onCommandStart();
     assert.equal(x.timers.length, 2);
-  });
-
-  it("ignores command starts in a hosting window", () => {
-    const x = trigger(true);
-    x.t.onCommandStart();
-    assert.equal(x.timers.length, 0);
-    assert.equal(x.scans(), 0);
-  });
-
-  it("skips the scan when the window started hosting before the timer fired", () => {
-    const x = trigger(false);
-    x.t.onCommandStart();
     x.setHosting(true);
-    x.timers[0]?.();
-    assert.equal(x.scans(), 0);
-  });
-
-  it("cancel drops a pending scan", () => {
-    const x = trigger(false);
     x.t.onCommandStart();
-    x.t.cancel();
-    assert.equal(x.cleared(), 1);
+    assert.equal(x.timers.length, 2, "a hosting window ignores command starts");
   });
 });

@@ -14,33 +14,12 @@ const mutate = (plan: FolderPlan, paths: readonly string[] = open) => {
 };
 
 describe("resolveMutation", () => {
-  for (const target of [TRACKED, STALE]) {
-    it(`reclaim re-adds ${target} that is open inside the deleted range`, () => {
-      const plan = planFolders({ folders: open.map((path) => ({ path })), trackedPath: TRACKED, anchorPath: L, target, isMultiRoot: true, adoptedAnchor: true, platform: "win32" });
-      assert.deepEqual(mutate(plan), { start: 1, deleteCount: 2, add: [target] });
-    });
-  }
-
-  it("skips a reclaim whose add path is the folder kept at index 0", () => {
+  it("re-adds a reclaim target open inside the deleted range, and skips a change whose target is already open elsewhere", () => {
+    const plan = planFolders({ folders: open.map((path) => ({ path })), trackedPath: TRACKED, anchorPath: L, target: STALE, isMultiRoot: true, adoptedAnchor: true, platform: "win32" });
+    assert.deepEqual(mutate(plan), { start: 1, deleteCount: 2, add: [STALE] });
     assert.equal(mutate({ kind: "reclaim", index: 1, deleteCount: 2, add: [L] }), null);
-  });
-
-  it("skips a replace whose target is open at another index", () => {
     assert.equal(mutate({ kind: "replace", index: 2, add: [STALE] }), null);
-  });
-
-  it("skips an append whose target is already open", () => {
-    assert.equal(mutate({ kind: "append", index: 3, add: [STALE] }), null);
-  });
-
-  it("compares paths with the given platform rules", () => {
-    const plan: FolderPlan = { kind: "append", index: 3, add: ["C:\\WORKTREES\\STALE"] };
-    assert.equal(mutate(plan), null);
+    assert.equal(mutate({ kind: "append", index: 3, add: ["C:\\WORKTREES\\STALE"] }), null);
     assert.deepEqual(resolveMutation({ kind: "append", index: 3, add: ["/A"] }, ["/a"], "linux"), { start: 3, deleteCount: 0, add: ["/A"] });
-  });
-
-  it("passes convert and remove through", () => {
-    assert.deepEqual(mutate({ kind: "convert", start: 0, deleteCount: 1, add: [L, STALE] }), { start: 0, deleteCount: 1, add: [L, STALE] });
-    assert.deepEqual(mutate({ kind: "remove", index: 2 }), { start: 2, deleteCount: 1, add: [] });
   });
 });

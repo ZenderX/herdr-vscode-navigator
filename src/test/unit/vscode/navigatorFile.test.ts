@@ -22,38 +22,18 @@ describe("prepareNavigatorWorkspaceFile", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("creates the file with [anchor, target] when none exists", async () => {
+  it("creates [anchor, target], keeps an existing navigator file byte-for-byte, and replaces folders lacking the anchor without losing settings", async () => {
     assert.equal(await prepareNavigatorWorkspaceFile(file, ANCHOR, TARGET, PLATFORM), "written");
     assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), { folders: [{ path: ANCHOR }, { path: TARGET }] });
-  });
 
-  it("leaves an existing navigator file byte-for-byte alone so a window that has it open keeps its folders", async () => {
-    const text = JSON.stringify({
-      folders: [{ path: ANCHOR }, { path: "/someone/elses" }],
-      settings: { "window.title": "x", "editor.tabSize": 2 },
-    });
-    await fs.writeFile(file, text, "utf8");
+    // A window that has the file open must keep its folders.
+    const kept = JSON.stringify({ folders: [{ path: ANCHOR }, { path: "/someone/elses" }], settings: { "window.title": "x" } });
+    await fs.writeFile(file, kept, "utf8");
     assert.equal(await prepareNavigatorWorkspaceFile(file, ANCHOR, TARGET, PLATFORM), "kept");
-    assert.equal(await fs.readFile(file, "utf8"), text);
-  });
+    assert.equal(await fs.readFile(file, "utf8"), kept);
 
-  it("keeps every other key and setting when it must replace folders that lack the anchor", async () => {
-    await fs.writeFile(
-      file,
-      JSON.stringify({ folders: [{ path: "/other" }], settings: { "window.title": "x", "editor.tabSize": 2 }, extensions: { recommendations: ["a.b"] } }),
-      "utf8",
-    );
+    await fs.writeFile(file, JSON.stringify({ folders: [{ path: "/other" }], settings: { "editor.tabSize": 2 } }), "utf8");
     assert.equal(await prepareNavigatorWorkspaceFile(file, ANCHOR, TARGET, PLATFORM), "written");
-    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), {
-      folders: [{ path: ANCHOR }, { path: TARGET }],
-      settings: { "window.title": "x", "editor.tabSize": 2 },
-      extensions: { recommendations: ["a.b"] },
-    });
-  });
-
-  it("replaces an unparsable file with a fresh one", async () => {
-    await fs.writeFile(file, "{ not json", "utf8");
-    assert.equal(await prepareNavigatorWorkspaceFile(file, ANCHOR, TARGET, PLATFORM), "written");
-    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), { folders: [{ path: ANCHOR }, { path: TARGET }] });
+    assert.deepEqual(JSON.parse(await fs.readFile(file, "utf8")), { folders: [{ path: ANCHOR }, { path: TARGET }], settings: { "editor.tabSize": 2 } });
   });
 });

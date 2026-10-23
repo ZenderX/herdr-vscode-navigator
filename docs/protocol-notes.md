@@ -2,6 +2,27 @@
 
 Captured with `node scripts/herdr-probe.mjs --listen 2` against the live herdr 0.9.5. Read-only: only `ping`, `session.snapshot`, `events.subscribe` were sent.
 
+## Hard invariant: herdr's state is read-only to this project
+
+herdr's own session restore is the source of truth. Nothing in `src/` or `plugin/`:
+
+- writes or renames herdr's `session.json` or anything else under herdr's config dir;
+- stops or starts the herdr server;
+- creates, closes or renames workspaces, tabs or panes;
+- types into panes.
+
+Allowed herdr interactions, and nothing else:
+
+- Read-only socket requests: `ping`, `session.snapshot`, `pane.get`, `pane.list`, `pane.process_info`, `events.subscribe`.
+- Read-only CLI calls: `herdr workspace list`, `herdr pane list`, `herdr plugin list`.
+- `workspace.focus`, the only state-changing socket request; it changes focus only (see below).
+- The auto-launch the user turned on (`herdrNavigator.autoLaunch`) or a status bar click starting a `herdr` client in a VS Code terminal.
+- The Install click of the plugin hint, typing `herdr plugin install ZenderX/herdr-vscode-navigator/plugin` into a visible VS Code terminal, where herdr asks the user to confirm.
+- The `vscode://` open link starting a `herdr [--session <s>]` client terminal and running `herdr [--session <s>] workspace focus <id>`.
+- The plugin's `herdr workspace focus` on the remembered space at startup, its `herdr notification show`, its transient discovery popup (`herdr plugin pane open --placement popup`, a plugin pane, not a user pane), and its own state files under the directory herdr provides as `HERDR_PLUGIN_STATE_DIR`.
+
+The extension's own files in VS Code's global storage (`navigator-lease.json`, the `anchor/` folder, the navigator workspace file) are not herdr state.
+
 ## Pipe
 
 Name used (marker path appended verbatim to the prefix; reachable from a non-elevated Node process):
@@ -69,7 +90,7 @@ Request: `{"id":"x","method":"pane.get","params":{"pane_id":"w1:p1"}}`. Response
 
 ## workspace.focus
 
-Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no live request was sent. This is the only request the extension sends that changes herdr state (used by auto-launch to re-select a space).
+Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no live request was sent. This is the only socket request the extension sends that changes herdr state, and it changes focus only (used by auto-launch to re-select a space).
 
 - Request: `{ "id": "<id>", "method": "workspace.focus", "params": { "workspace_id": "<id>" } }` (`params` is `WorkspaceTarget`, `workspace_id` required string).
 - Response: success result type not isolated in the schema (likely `workspace_info`); the client ignores the payload and rejects on an error envelope.
@@ -77,22 +98,16 @@ Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no li
 
 ## session.json (schema version 3)
 
-herdr persists its layout in `session.json` and, in 0.9.5, restores each pane in its spawn `cwd`, not its live one. The extension reads it while herdr runs and rewrites it only while the server is stopped (`src/restore/`).
+herdr persists its layout in `session.json` and, in 0.9.5, restores each pane in its spawn `cwd`, not its live one. The extension does not read or write this file (see the hard invariant above); the notes below are for reading it by hand.
 
-Location (default session only): `%APPDATA%\herdr\session.json` on Windows, `$XDG_CONFIG_HOME/herdr/session.json` or `~/.config/herdr/session.json` elsewhere. `HERDR_SESSION` and `HERDR_CONFIG_PATH` are unsupported and skipped. herdr keeps its own copies under `session-snapshots/` and `session-backups/` (see https://herdr.dev/docs/session-state/); the extension adds its own backup in its global storage.
+Location (default session): `%APPDATA%\herdr\session.json` on Windows, `$XDG_CONFIG_HOME/herdr/session.json` or `~/.config/herdr/session.json` elsewhere. herdr keeps its own copies under `session-snapshots/` and `session-backups/` (see https://herdr.dev/docs/session-state/).
 
-Fields read (everything else is preserved untouched, so the rewrite round-trips what herdr wrote):
+Schema facts observed in version 3:
 
-- `version`: must be `3`, otherwise the file is left alone.
+- `version`: `3`.
 - `workspaces[].id`, `workspaces[].identity_cwd`, `workspaces[].tabs[].panes`: a map keyed by internal pane id, each pane with `cwd` (the spawn folder) and optionally `agent_session.value`.
-- `workspaces[].public_pane_numbers`: internal pane id to the public number used in live ids.
-- `workspaces[].worktree_space`: validated as an object only; never written.
-
-Fields written: pane `cwd` and workspace `identity_cwd`, in the surface form of the old value (slash style, trailing separator), e.g. `C:\Users\me\proj\`.
-
-Pane join rule: a live pane `w<N>:p<K>` from `session.snapshot` joins the persisted pane in workspace `w<N>` whose `public_pane_numbers` entry equals `K`. Live ids are not the internal ids, so the number is the only link. Live panes with no match are skipped.
-
-Repair match rule: a persisted pane is rewritten only when the manifest has an entry with the same internal id and the same spawn `cwd`, and, when both sides carry an `agent_session.value`, those are equal. Any doubt (path mismatch, manifest older than 14 days, no matching workspace, nothing to change) leaves the file alone. `worktree_space` is not rewritten because herdr 0.9.5 does not re-derive it; a pane that moved into another repository keeps its old worktree grouping.
+- `workspaces[].public_pane_numbers`: internal pane id to the public number used in live ids. A live pane `w<N>:p<K>` from `session.snapshot` is the persisted pane in workspace `w<N>` whose `public_pane_numbers` entry equals `K`; live ids are not the internal ids, so the number is the only link.
+- `workspaces[].worktree_space`: an object herdr 0.9.5 does not re-derive on restore.
 
 ## Update events
 

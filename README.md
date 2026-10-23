@@ -40,13 +40,11 @@ Only the window that hosts herdr follows automatically. "Herdr: Follow Focused P
 
 The status bar item shows the followed folder, with an open eye when auto-follow is on and a dimmed closed eye when it is off. Click it to launch herdr in an editor tab when herdr is not running in this window, or to toggle auto-follow when it is. When herdr is not installed, the item reads "not installed" and a click opens the [herdr install page](https://herdr.dev/docs/install/).
 
-## Restoring pane folders
-
-herdr 0.9.5 restores panes in the folder they were spawned in, not the one they were in when it stopped. While the window hosts herdr, the extension records each pane's folder. When auto-launch finds herdr stopped, it fixes herdr's `session.json` first, keeping a backup. After stopping herdr yourself, run "Herdr Navigator: Repair herdr session folders" before starting it again. Turn this off with `herdrNavigator.repairSessionOnLaunch`. Named sessions and `HERDR_CONFIG_PATH` are skipped.
+herdr restores its own panes after a restart; the extension never edits herdr's session state.
 
 ## Optional herdr plugin
 
-A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it, but when the plugin is installed and enabled the extension leaves re-focusing after a launch to it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`, or click the small hint next to the status bar item that appears while the plugin is missing or disabled; the hint can be hidden for good.
+A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it, but when the plugin is installed and enabled the extension leaves re-focusing after a launch to it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`, or click the small plug hint directly to the right of the herdr status bar item (the auto-follow toggle) that appears while the plugin is missing or disabled; the hint can be hidden for good.
 
 ## Commands
 
@@ -57,7 +55,6 @@ A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navi
 | `herdrNavigator.launchHerdr` | Herdr: Launch Herdr | none |
 | `herdrNavigator.reconnect` | Herdr: Reconnect | none |
 | `herdrNavigator.showDiagnostics` | Herdr Navigator: Show Diagnostics | none |
-| `herdrNavigator.repairSessionFolders` | Herdr Navigator: Repair herdr session folders | none |
 
 The key binding is a chord because VS Code handles chords even while the herdr terminal has focus. A single key would go to the shell.
 
@@ -69,7 +66,6 @@ The key binding is a chord because VS Code handles chords even while the herdr t
 | `herdrNavigator.followMode` | `workspace` | `workspace` or `folder`, as described above. |
 | `herdrNavigator.followGitRoot` | `true` | Follow the Git repository root instead of the exact directory. |
 | `herdrNavigator.autoLaunch` | `true` | Relaunch herdr when VS Code restores a navigator window in which herdr was running. |
-| `herdrNavigator.repairSessionOnLaunch` | `true` | Fix pane folders in herdr's session file before auto-launch starts herdr. |
 | `herdrNavigator.cwdSource` | `auto` | Which pane directory to follow: `auto`, `pane` or `foreground`. |
 | `herdrNavigator.liveCwdProbe` | `true` | Read the live directory of the pane's shell process. |
 | `herdrNavigator.cwdPollMs` | `1000` | Milliseconds between checks for a `cd`. Values from 1 to 249 are raised to 250. `0` disables the check. |
