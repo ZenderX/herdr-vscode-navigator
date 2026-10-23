@@ -17,6 +17,8 @@ export interface PlanInput {
   terminalName: "herdr";
   /** An explicit user launch: skips the enabled, navigator and was-running rules. */
   explicit?: boolean;
+  /** A herdr server already answers on the socket; an explicit launch then only attaches. */
+  serverRunning?: boolean;
 }
 
 export type NoneReason = "disabled" | "not-navigator" | "not-restored" | "already-hosting" | "herdr-missing";
@@ -27,7 +29,7 @@ export type LaunchPlan =
   | { action: "create"; name: "herdr"; command: "herdr"; cwd?: string; focusLabel?: string; focusFolder?: string };
 
 export function planAutoLaunch(input: PlanInput): LaunchPlan {
-  const { platform, enabled, isNavigatorWindow, record, now, herdrHostingNow, herdrPath, terminals, terminalName, explicit } = input;
+  const { platform, enabled, isNavigatorWindow, record, now, herdrHostingNow, herdrPath, terminals, terminalName, explicit, serverRunning } = input;
   if (!explicit) {
     if (!enabled) return { action: "none", reason: "disabled" };
     if (!isNavigatorWindow) return { action: "none", reason: "not-navigator" };
@@ -40,7 +42,9 @@ export function planAutoLaunch(input: PlanInput): LaunchPlan {
   // A takeover whose reload never came (workspace open elsewhere) must not steer a much later launch.
   const pendingTakeoverFolder = now - record.updatedAt <= PENDING_TAKEOVER_MAX_MS ? record.pendingTakeoverFolder : undefined;
   const cwd = normalizeCwd(pendingTakeoverFolder ?? record.lastFolder, platform) ?? undefined;
-  const focusLabel = pendingTakeoverFolder === undefined ? record.lastSpaceLabel : undefined;
+  // herdr's focused space is server-wide: re-focusing the remembered one would also move the user's other clients.
+  const attachOnly = explicit === true && serverRunning === true;
+  const focusLabel = pendingTakeoverFolder === undefined && !attachOnly ? record.lastSpaceLabel : undefined;
   const focusFolder = pendingTakeoverFolder;
   const terminalIndex = terminals.findIndex(({ name, isInteractedWith }) => name === terminalName && !isInteractedWith);
   if (terminalIndex >= 0) {

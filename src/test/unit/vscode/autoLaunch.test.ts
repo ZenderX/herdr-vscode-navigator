@@ -120,6 +120,8 @@ function harness(
     lease?: NavigatorLease;
     /** createTerminal returns a new terminal per call, recorded in `madeTerminals`. */
     distinctTerminals?: boolean;
+    /** Whether the herdr server answers on the socket; defaults to stopped. */
+    serverRunning?: boolean;
   } = {},
 ): Harness {
   const clock = new FakeClock();
@@ -179,6 +181,7 @@ function harness(
       return Promise.resolve(pluginState);
     },
     terminalHostsHerdr: (terminal) => Promise.resolve(h.terminalHosting.get(terminal) ?? "no"),
+    serverRunning: () => Promise.resolve(options.serverRunning ?? false),
     rescan: async () => {
       rescans.push(rescanState);
       await gate;
@@ -948,6 +951,41 @@ describe("AutoLaunch plugin-first re-focus", () => {
     await h.clock.advance(16_000);
     assert.ok(!h.logs.some((line) => line.includes("refocus deferred to plugin")));
     assert.deepEqual(h.focused, ["w1"]);
+  });
+
+  it("explicit launch into a running server issues no workspace focus", async () => {
+    const h = harness(remembered(), { serverRunning: true });
+    assert.equal(await h.auto.launchNow(), "launched");
+    h.setRescan("yes");
+    await h.clock.advance(16_000);
+    assert.deepEqual(h.focused, []);
+    assert.equal(h.pluginCalls, 0);
+  });
+
+  it("explicit launch into a running server still focuses a pending takeover folder once", async () => {
+    const h = harness(record({ pendingTakeoverFolder: "C:\\proj", lastFolder: "C:\\elsewhere", lastSpaceLabel: "beta" }), { serverRunning: true });
+    assert.equal(await h.auto.launchNow(), "launched");
+    h.setRescan("yes");
+    await h.clock.advance(16_000);
+    assert.deepEqual(h.focused, ["w1"]);
+  });
+
+  it("explicit launch with the server down still re-focuses the remembered space", async () => {
+    const h = harness(remembered());
+    assert.equal(await h.auto.launchNow(), "launched");
+    h.setRescan("yes");
+    await h.clock.advance(16_000);
+    assert.deepEqual(h.focused, ["w2"]);
+  });
+
+  it("restore-time auto-launch with the server down re-focuses the remembered space", async () => {
+    const h = harness(remembered());
+    h.auto.start();
+    await h.auto.onHosting("no");
+    await h.clock.advance(2000);
+    h.setRescan("yes");
+    await h.clock.advance(16_000);
+    assert.deepEqual(h.focused, ["w2"]);
   });
 
   it("does not detect the plugin when there is no label to re-focus", async () => {

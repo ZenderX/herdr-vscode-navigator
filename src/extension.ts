@@ -256,6 +256,7 @@ interface AutoLaunchEnv {
   requestHosting: (force?: boolean) => Promise<void>;
   newClient: () => HerdrClient;
   repair: () => Promise<RepairOutcome>;
+  socketName: () => string;
 }
 
 function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
@@ -283,6 +284,14 @@ function createAutoLaunch(env: AutoLaunchEnv): AutoLaunch {
         return (await detectHosting([{ processId: terminal.processId }], env.platform, log)).state;
       } catch {
         return "unknown";
+      }
+    },
+    serverRunning: async () => {
+      // socketName() throws without a socket path; "not running" keeps the re-focus.
+      try {
+        return (await probeSocket(env.socketName(), REACHABLE_TIMEOUT_MS, env.platform)).state === "running";
+      } catch {
+        return false;
       }
     },
     rescan: () => env.requestHosting(true),
@@ -653,6 +662,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     chosenAnchor,
     requestHosting,
     newClient,
+    socketName,
   });
   hostingMonitor.subscribe(({ state, clientPids }) => {
     const was = consent.autoAllowed();

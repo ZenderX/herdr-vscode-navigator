@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Clicking the status bar item to attach to an already-running herdr server no longer re-focuses the last remembered space, so it no longer moves the focus of other herdr clients. Restoring a window still re-focuses the remembered space.
 - The optional herdr plugin id is now `zenderx.herdr-navigator` (renamed from `zenderx.refocus-last-space`). The extension detects the new id; unlink the old plugin and install the plugin again.
 - New "Open in VS Code" action in the optional herdr plugin. It opens a `vscode://z3nder.herdr-navigator/open?space=<id>[&session=<name>]` link; the extension validates it, shows the matching herdr terminal (or opens one in the editor area) and focuses the requested space. Bind it in herdr's `config.toml`; see docs/open-in-vscode.md.
 - When herdr is installed but the optional `zenderx.herdr-navigator` plugin is not installed or not enabled, a small plug icon appears next to the status bar item. Clicking it explains the plugin and offers Install (runs `herdr plugin install ZenderX/herdr-vscode-navigator/plugin` in a visible terminal, where herdr asks for confirmation), Learn more, and Don't show again (remembered across reloads and synced). The plugin is checked at startup, when herdr first appears, and after the install terminal closes. New command `herdrNavigator.pluginHint`.

@@ -66,6 +66,8 @@ export interface AutoLaunchDeps {
   repairOnLaunch: () => boolean;
   /** Repairs herdr's session file; never rejects the launch, and is awaited so the write completes first. */
   repairSession: () => Promise<void>;
+  /** Whether a herdr server answers on the socket; false when stopped or in doubt. Never rejects. */
+  serverRunning: () => Promise<boolean>;
   /** Forces a hosting scan that ends in onHosting. */
   rescan: () => Promise<void>;
   /** Scans only this terminal's process tree for a herdr client; `unknown` when that cannot be determined. Never rejects. */
@@ -442,7 +444,7 @@ export class AutoLaunch {
     await this.execute(plan, terminals, herdrPath);
   }
 
-  private plan(herdrPath: string | undefined, terminals: readonly AutoLaunchTerminal[], explicit: boolean): LaunchPlan {
+  private plan(herdrPath: string | undefined, terminals: readonly AutoLaunchTerminal[], explicit: boolean, serverRunning = false): LaunchPlan {
     const { deps } = this;
     return planAutoLaunch({
       platform: deps.platform,
@@ -456,6 +458,7 @@ export class AutoLaunch {
       terminals: terminals.map(({ name, state }) => ({ name, isInteractedWith: state.isInteractedWith })),
       terminalName: TERMINAL_NAME,
       explicit,
+      serverRunning,
     });
   }
 
@@ -479,7 +482,7 @@ export class AutoLaunch {
       const herdrPath = await deps.resolveHerdr();
       if (herdrPath === undefined) return "herdr-missing";
       const terminals = deps.terminals();
-      const plan = this.plan(herdrPath, terminals, true);
+      const plan = this.plan(herdrPath, terminals, true, await deps.serverRunning());
       if (plan.action === "none") return "running";
       this.logPlan(plan);
       await this.execute(plan, terminals, herdrPath);

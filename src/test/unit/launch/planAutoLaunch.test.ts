@@ -76,6 +76,18 @@ for (const platform of platforms) {
       const plan = planAutoLaunch({ ...base, record: { version: 1, herdrWasRunning: true, updatedAt: 1 } });
       assert.deepEqual(plan, { action: "create", name: "herdr", command: "herdr", cwd: undefined, focusLabel: undefined });
     });
+    it("explicit launch into a running server drops the remembered label but keeps the cwd", () => {
+      const plan = planAutoLaunch({ ...base, explicit: true, serverRunning: true });
+      assert.deepEqual(plan, { action: "create", name: "herdr", command: "herdr", cwd: expectedCwd(platform), focusLabel: undefined });
+    });
+    it("explicit launch into a running server keeps a pending takeover focus", () => {
+      const pending = reduce(record, { type: "takeoverPending", folder: folderFor(platform).replace("api", "web") }, 2);
+      const plan = planAutoLaunch({ ...base, record: pending, explicit: true, serverRunning: true });
+      assert.equal(plan.action === "create" ? plan.focusFolder : undefined, folderFor(platform).replace("api", "web"));
+    });
+    it("a running server does not change the restore-time auto-launch", () => {
+      assert.deepEqual(planAutoLaunch({ ...base, serverRunning: true }), planAutoLaunch(base));
+    });
     it("launches in the pending takeover folder once, then falls back to the remembered space", () => {
       const pendingFolder = folderFor(platform).replace("api", "web");
       const pending = reduce(record, { type: "takeoverPending", folder: pendingFolder }, 2);
