@@ -36,3 +36,39 @@ command = ["sh", "scripts/restore.sh"]
 [[startup]]
 platforms = ["windows"]
 command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/restore.ps1"]
+
+[[startup]]
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/discover.sh"]
+
+[[startup]]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/discover.ps1"]
+
+[[events]]
+on = "workspace.created"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/discover.sh"]
+
+[[events]]
+on = "workspace.created"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/discover.ps1"]
+
+[[panes]]
+id = "discovery"
+title = "Herdr Navigator for VS Code"
+placement = "popup"
+width = 60
+height = 8
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/discovery-popup.sh"]
+
+[[panes]]
+id = "discovery-windows"
+title = "Herdr Navigator for VS Code"
+placement = "popup"
+width = 60
+height = 8
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/discovery-popup.ps1"]
