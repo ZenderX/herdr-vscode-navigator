@@ -1,6 +1,6 @@
-# Refocus Last Space
+# Herdr Navigator
 
-A small herdr plugin that focuses the space you last used when herdr starts again.
+A small herdr plugin that focuses the space you last used when herdr starts again, and adds an "Open in VS Code" action for the focused space.
 
 herdr restores your spaces after a restart, but it only knows the focused space as of its last save. After a crash, a forced quit, or a reboot that can be an older space. This plugin records the focused space every time you switch and, once herdr has restored the session, focuses the recorded one.
 
@@ -16,7 +16,7 @@ For a local checkout:
 
 ```
 herdr plugin link /path/to/herdr-vscode-navigator/plugin
-herdr plugin unlink zenderx.refocus-last-space
+herdr plugin unlink zenderx.herdr-navigator
 ```
 
 ## Requirements
@@ -30,6 +30,19 @@ herdr plugin unlink zenderx.refocus-last-space
 - In its `startup` hook it reads that file, looks the label up in `herdr workspace list`, and runs `herdr workspace focus` on the match.
 - Spaces are matched by label, because space ids change across restarts. If the label no longer exists, or nothing was recorded yet, the hook does nothing.
 - On Linux and macOS, labels containing a double quote or backslash are not recorded.
+
+## Open in VS Code
+
+The plugin adds an "Open in VS Code" action for the focused space. It opens a `vscode://z3nder.herdr-navigator/open` link, which the Herdr Navigator extension handles, and shows a herdr notification that you can detach the terminal with `prefix+q`. It never detaches or closes anything itself.
+
+herdr manifests cannot ship keybindings, so bind it in your herdr config (use `zenderx.herdr-navigator.open-in-vscode-windows` on Windows), then run `herdr server reload-config`. It needs the Herdr Navigator extension installed in VS Code. Details are in the [Open in VS Code guide](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/open-in-vscode.md).
+
+```toml
+[[keys.command]]
+key = "prefix+o"
+type = "plugin_action"
+command = "zenderx.herdr-navigator.open-in-vscode"
+```
 
 ## With the VS Code extension
 

@@ -30,7 +30,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onUri"
   ],
   "capabilities": {
     "untrustedWorkspaces": {

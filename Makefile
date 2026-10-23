@@ -21,5 +21,5 @@ link-plugin:
 	herdr plugin link "$(CURDIR)/plugin"
 
 unlink-plugin:
-	herdr plugin unlink zenderx.refocus-last-space
-	@echo "Note: the plugin's saved record stays in %LOCALAPPDATA%\herdr\plugins\zenderx.refocus-last-space"
+	herdr plugin unlink zenderx.herdr-navigator
+	@echo "Note: the plugin's saved record stays in %LOCALAPPDATA%\herdr\plugins\zenderx.herdr-navigator"

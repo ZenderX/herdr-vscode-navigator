@@ -1,4 +1,4 @@
-export const REFOCUS_PLUGIN_ID = "zenderx.refocus-last-space";
+export const REFOCUS_PLUGIN_ID = "zenderx.herdr-navigator";
 const LIST_TIMEOUT_MS = 3000;
 
 export type PluginState = "present" | "absent" | "unknown";

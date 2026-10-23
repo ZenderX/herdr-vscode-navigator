@@ -101,6 +101,31 @@ Warnings:
 4. This step runs on the default session and stops your real herdr server; only do it when nothing in it needs to survive. For the extension itself, use a normal window with a disposable workspace: let the navigator host herdr, `cd` in a pane, stop herdr, then run "Herdr Navigator: Repair herdr session folders" and relaunch.
    Expected: the pane restores in the folder you `cd`'d to; the output channel lists the changes; a backup exists in the extension's global storage (newest five kept). Setting `herdrNavigator.repairSessionOnLaunch` to `false` and repeating restores herdr's own behaviour.
 
+## Open in VS Code
+
+Isolated: a scratch herdr session and a throwaway VS Code profile. Pass `--session <scratch>` on every herdr `workspace|pane|api|plugin` command; `HERDR_SESSION` is ignored by them. Never run a bare `herdr server stop`.
+
+Automated checks (run 2026-10-22, herdr 0.9.5, Windows 11):
+
+1. Package the VSIX outside the repo: `npx vsce package --no-dependencies --out <tmp>/smoke.vsix`. Result: packaged, 64 files.
+2. Install it into a throwaway profile: `code --user-data-dir <tmp>/ud --extensions-dir <tmp>/ext --install-extension <tmp>/smoke.vsix`. Result: `z3nder.herdr-navigator-0.1.3` installed. Pre-approve the URI dialog with `"extensions.confirmedUriHandlerExtensionIds": ["z3nder.herdr-navigator"]` in `<tmp>/ud/User/settings.json`.
+3. Start the scratch session (`herdr --session <scratch> server`), then `herdr --session <scratch> workspace create --label second --no-focus`. Result: workspaces `w1` (focused) and `w2`; `herdr session list --json` listed `default` plus the scratch session.
+4. Link the plugin (`make link-plugin`) and run `herdr --session <scratch> plugin action invoke open-in-vscode-windows --plugin zenderx.herdr-navigator` (use `open-in-vscode` on Linux and macOS). Result: the action ran and returned the action record. The OS opener sends the URI to the default VS Code install, so this only shows the URI was dispatched.
+5. Cleanup: `herdr session stop <scratch>`, `herdr session delete <scratch>`, `herdr plugin unlink zenderx.herdr-navigator`, delete the plugin's state directory and the temp profile. Result: `herdr session list --json` listed only `default`; the plugin was gone from `herdr plugin list --json`.
+
+Not completed: delivering `code --user-data-dir <tmp>/ud --extensions-dir <tmp>/ext --open-url "vscode://z3nder.herdr-navigator/open?space=w2&session=<scratch>"` and reading the `open request:` lines from `<tmp>/ud/logs/`. The isolated VS Code never started: its main process exited with `Code is currently being updated. Please wait for the update to complete before launching.` (the installer mutex was held by a pending update of the normal install). Redo this once VS Code has finished updating or been restarted; expect `open request: create` or `open request: reveal`, then `open request: focused space (attempt N)`, and `herdr --session <scratch> workspace list` showing `w2` focused.
+
+Manual steps (cannot be scripted):
+
+1. First use of the URI: VS Code asks whether to allow the extension to open the link. Choose Allow (or Allow and remember); declining must leave herdr untouched.
+2. Invoke the action with VS Code closed: VS Code starts and a herdr terminal opens in the editor area on the requested space. On a machine with no `vscode://` handler, the plugin shows the notification "Could not open VS Code".
+3. Not measured by a script:
+   - (a) Press the keybinding configured per the Setup section of `docs/open-in-vscode.md` on a space and check the matching VS Code window opens or reveals the herdr terminal and focuses that space.
+   - (b) Right-click a space and record whether "Open in VS Code" appears. Expected: absent in herdr 0.9.5. If it appears, update `docs/open-in-vscode.md`.
+4. Run the invoke with a client attached in a real console and check the herdr notification text (without a client, `notification show` returns `"shown":false,"reason":"no_foreground_client"`; a second call within about 15 seconds returns `rate_limited`, which is not an error).
+5. Repeat the URI delivery with VS Code Insiders (`vscode-insiders://`) if you use it.
+6. Send a URI with an invalid space id (for example `space=a b`) and check the error message "Herdr Navigator ignored an invalid open request." appears and no terminal opens.
+
 ## Saved navigator workspace and the jump list
 
 `scripts/jump-list-repro/run.ps1` runs scenarios A to D in an isolated VS Code (see its README); these are the manual equivalents. Needs herdr on PATH and the installed VSIX in a normal window, not F5. The navigator workspace is `navigator.code-workspace` in the extension's global storage, in the `anchor` folder.

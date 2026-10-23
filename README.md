@@ -9,6 +9,7 @@ Keeps VS Code's Explorer and Source Control on the folder of the pane you have f
 - Snaps to the Git repository root by default, so moving between subfolders of one repository changes nothing.
 - Relaunches herdr when VS Code restores a navigator window.
 - Needs no configuration on Windows, macOS or Linux.
+- With the optional herdr plugin, an "Open in VS Code" action jumps from herdr to this extension. See [Open in VS Code](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/open-in-vscode.md).
 
 ## Requirements
 

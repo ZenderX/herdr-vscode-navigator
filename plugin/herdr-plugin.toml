@@ -1,8 +1,8 @@
-id = "zenderx.refocus-last-space"
-name = "Refocus Last Space"
+id = "zenderx.herdr-navigator"
+name = "Herdr Navigator"
 version = "0.1.0"
 min_herdr_version = "0.9.5"
-description = "Focuses the space you last used after herdr restarts, even after a crash or reboot."
+description = "Focuses the space you last used after herdr restarts, even after a crash or reboot, and adds an Open in VS Code action."
 platforms = ["linux", "macos", "windows"]
 
 [[events]]
@@ -14,6 +14,20 @@ command = ["sh", "scripts/record.sh"]
 on = "workspace.focused"
 platforms = ["windows"]
 command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/record.ps1"]
+
+[[actions]]
+id = "open-in-vscode"
+title = "Open in VS Code"
+contexts = ["workspace"]
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/open-in-vscode.sh"]
+
+[[actions]]
+id = "open-in-vscode-windows"
+title = "Open in VS Code"
+contexts = ["workspace"]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/open-in-vscode.ps1"]
 
 [[startup]]
 platforms = ["linux", "macos"]

@@ -45,6 +45,7 @@ import { resolveAnchor } from "./vscode/anchor";
 import { AutoLaunch, SESSION_KEY, sessionMemento } from "./vscode/autoLaunch";
 import { createFollowConsent } from "./vscode/followConsent";
 import type { FollowConsent } from "./vscode/followConsent";
+import { createUriHandler } from "./vscode/uriHandler";
 import { createHerdrConnection } from "./vscode/herdrConnection";
 import type { HerdrConnection } from "./vscode/herdrConnection";
 import { HostingMonitor, createCommandStartTrigger, detectHosting } from "./vscode/hostingMonitor";
@@ -553,6 +554,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const output = vscode.window.createOutputChannel("Herdr Navigator", { log: true });
   const diagnostics = createLog(channelWriter(output));
   const log: Logger = diagnostics.log;
+  // Registered before the first await so a URI buffered during activation is replayed to it.
+  context.subscriptions.push(vscode.window.registerUriHandler(createUriHandler(log)));
   // First line of the log: a second activation line in one session marks an extension-host restart.
   log("info", `activated herdr-navigator ${String(context.extension.packageJSON.version)} at ${new Date().toISOString()}; workspace ${describeWorkspace()}`);
   const statusBar = new StatusBar(vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left), (id) => new vscode.ThemeColor(id));
