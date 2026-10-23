@@ -1,0 +1,39 @@
+id = "zenderx.discovery-probe"
+name = "Discovery probe"
+version = "0.0.1"
+min_herdr_version = "0.9.5"
+description = "Throwaway probe for the Herdr Navigator discovery popup. Do not install."
+platforms = ["windows"]
+
+[[startup]]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/hook.ps1"]
+
+[[events]]
+on = "workspace.created"
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/hook.ps1"]
+
+[[events]]
+on = "tab.created"
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/hook.ps1"]
+
+[[events]]
+on = "workspace.focused"
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/noop.ps1"]
+
+# Relative -File path: tests whether a pane command survives the extended-length cwd.
+[[panes]]
+id = "popup"
+title = "Probe popup"
+placement = "popup"
+width = 60
+height = 8
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/popup.ps1"]
+
+# Same popup, script located through HERDR_PLUGIN_ROOT instead of the cwd.
+[[panes]]
+id = "popup-root"
+title = "Probe popup (plugin root)"
+placement = "popup"
+width = 60
+height = 8
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "& (Join-Path $env:HERDR_PLUGIN_ROOT 'scripts/popup.ps1')"]
