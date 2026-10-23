@@ -2,7 +2,7 @@ id = "zenderx.herdr-navigator"
 name = "Herdr Navigator"
 version = "0.1.0"
 min_herdr_version = "0.9.5"
-description = "Focuses the space you last used after herdr restarts, even after a crash or reboot, and adds an Open in VS Code action."
+description = "Pairs with Herdr Navigator for VS Code. Focuses the space you last used after herdr restarts, even after a crash or reboot, and adds an Open in VS Code action."
 platforms = ["linux", "macos", "windows"]
 
 [[events]]

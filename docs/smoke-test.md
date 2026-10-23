@@ -126,6 +126,21 @@ Manual steps (cannot be scripted):
 5. Repeat the URI delivery with VS Code Insiders (`vscode-insiders://`) if you use it.
 6. Send a URI with an invalid space id (for example `space=a b`) and check the error message "Herdr Navigator ignored an invalid open request." appears and no terminal opens.
 
+## Discovery popup
+
+Isolated: a scratch herdr session, a scratch home and a scratch state directory. `make link-plugin` links the plugin globally, so while it is linked your live default session also runs the discovery hooks and can show the popup there; unlink it when done. Pass `--session <scratch>` on every herdr command. Never touch your real VS Code extensions folder or the plugin's real state directory.
+
+1. In a VS Code integrated terminal, create an empty scratch home and an empty scratch state directory, and start the scratch server from that console with `HERDR_NAV_HOME=<scratch-home>` and `HERDR_NAV_STATE_DIR=<scratch-state>` set (`herdr --session <scratch> server`). The hooks and the popup inherit the server's environment, so they read and write only the scratch locations; `<scratch-state>\discovery.state` is the state file below. Link the plugin (`make link-plugin`).
+2. Attach a client to the scratch session, then create a space (`herdr --session <scratch> workspace create --label demo`).
+   Expected: a short "Herdr Navigator" toast, then the "Herdr Navigator for VS Code" popup, and `discovery.state` shows `shown=1` and today's `last_shown` with no `decision` value yet.
+3. Type a few letters (including `q`) and an arrow key while the popup appears, then press `q` again after it has been up for a few seconds. Expected: the popup stays open and `discovery.state` is unchanged; only `i`, `l`, `n`, `x` or a bare Esc answer it. Then press `n`. Expected: `decision=not-now`, `shown=1` (the answer does not count again). Create another space: no popup (under 30 days).
+4. Delete the state file and repeat with `l` (Marketplace page opens) and `i` (VS Code offers to install; decline). Each time the state ends as `shown=1`.
+5. Delete the state file, create a space and close the popup without answering (stop and restart the scratch server, or `popup.close` over the API). Expected: `shown=1`, `decision` empty.
+6. Delete the state file, repeat with `x`. Expected: `decision=never`; later spaces and a restart never show the popup.
+7. Delete the state file, create the folder `z3nder.herdr-navigator-0.0.0` under `<scratch-home>\.vscode\extensions`, create a space. Expected: no popup and `decision=installed`.
+8. Dry runs only: `HERDR_NAV_CLIENT=0` makes `scripts/discover.sh --dry-run` (or `discover.ps1 -DryRun`) print `skip:no-client`, and `HERDR_NAV_CLIENT=1` makes it print `show` when the other conditions hold. Never set `HERDR_NAV_CLIENT` on the server, since it skips the real client check.
+9. Cleanup: `herdr session stop <scratch>`, `herdr session delete <scratch>`, `herdr plugin unlink zenderx.herdr-navigator`, delete the scratch home and state directory.
+
 ## Saved navigator workspace and the jump list
 
 `scripts/jump-list-repro/run.ps1` runs scenarios A to D in an isolated VS Code (see its README); these are the manual equivalents. Needs herdr on PATH and the installed VSIX in a normal window, not F5. The navigator workspace is `navigator.code-workspace` in the extension's global storage, in the `anchor` folder.

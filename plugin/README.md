@@ -1,5 +1,7 @@
 # Herdr Navigator
 
+Pairs with Herdr Navigator for VS Code.
+
 A small herdr plugin that focuses the space you last used when herdr starts again, and adds an "Open in VS Code" action for the focused space.
 
 herdr restores your spaces after a restart, but it only knows the focused space as of its last save. After a crash, a forced quit, or a reboot that can be an older space. This plugin records the focused space every time you switch and, once herdr has restored the session, focuses the recorded one.
@@ -43,6 +45,10 @@ key = "prefix+o"
 type = "plugin_action"
 command = "zenderx.herdr-navigator.open-in-vscode"
 ```
+
+## Discovery popup
+
+If you use VS Code but not the extension, the plugin may show a small popup offering to install it (Install, Learn more, Not now, Never). It shows at most three times (counted when it opens), at least 30 days apart, only while a herdr client is attached (the check shows a brief toast; if the popup then cannot open, at most one more toast that day), never once you answer Never or the extension is installed, and it installs nothing by itself. Details are in the [discovery guide](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/plugin-discovery.md).
 
 ## With the VS Code extension
 
