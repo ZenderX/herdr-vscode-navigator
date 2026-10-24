@@ -45,6 +45,14 @@ command = ["sh", "scripts/discover.sh"]
 platforms = ["windows"]
 command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/discover.ps1"]
 
+[[startup]]
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-return.sh"]
+
+[[startup]]
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-return.ps1"]
+
 [[events]]
 on = "workspace.created"
 platforms = ["linux", "macos"]

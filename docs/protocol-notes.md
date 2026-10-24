@@ -9,7 +9,9 @@ herdr's own session restore is the source of truth. Nothing in `src/` or `plugin
 - writes or renames herdr's `session.json` or anything else under herdr's config dir;
 - stops or starts the herdr server;
 - creates, closes or renames workspaces, tabs or panes;
-- types into panes.
+- types into panes, with one exception for `plugin/` below.
+
+The one exception: the plugin's `cwd-return` startup hook may run `herdr pane run <pane> "cd '<folder>'"`, and nothing else, into a pane herdr restored moments ago, only when all of these hold: the pane is in the plugin's record and its recorded folder exists; its current `cwd` differs from the recorded folder; it has no `agent` or `agent_session` key; its shell has drawn its first prompt (`cwd` no longer in spawn form with a trailing separator); and its shell runs no other program (Windows: Git's MSYS `ps.exe -l` shows no child of the pane's bash; Unix, inferred and not measured: `pane process-info` shows no `foreground_process_group_id` other than `shell_pid` and at most one foreground process). This works around herdr issue #5199 (https://github.com/herdrdev/herdr/issues/5199), herdr 0.9.5 restoring spawn folders instead of live ones, and is to be removed once herdr persists the live cwd. The extension (`src/`) never types into panes and stays fully read-only.
 
 Allowed herdr interactions, and nothing else:
 
@@ -19,7 +21,7 @@ Allowed herdr interactions, and nothing else:
 - The auto-launch the user turned on (`herdrNavigator.autoLaunch`) or a status bar click starting a `herdr` client in a VS Code terminal.
 - The Install click of the plugin hint, typing `herdr plugin install ZenderX/herdr-vscode-navigator/plugin` into a visible VS Code terminal, where herdr asks the user to confirm.
 - The `vscode://` open link starting a `herdr [--session <s>]` client terminal and running `herdr [--session <s>] workspace focus <id>`.
-- The plugin's `herdr workspace focus` on the remembered space at startup, its `herdr notification show`, its transient discovery popup (`herdr plugin pane open --placement popup`, a plugin pane, not a user pane), and its own state files under the directory herdr provides as `HERDR_PLUGIN_STATE_DIR`.
+- The plugin's `herdr workspace focus` on the remembered space at startup, its `herdr notification show`, its transient discovery popup (`herdr plugin pane open --placement popup`, a plugin pane, not a user pane), its guarded `herdr pane run <pane> "cd '<folder>'"` at startup (the exception above), its `herdr pane list` polling every few seconds by the detached `cwd-track` recorder and `herdr pane process-info` reads for the guard, and its own state files under the directory herdr provides as `HERDR_PLUGIN_STATE_DIR` (including `cwd-<session>.txt`, `cwd-track-<session>.pid` and, after a recorder error, `cwd-track-<session>.err`).
 
 The extension's own files in VS Code's global storage (`navigator-lease.json`, the `anchor/` folder, the navigator workspace file) are not herdr state.
 
@@ -72,7 +74,7 @@ result: { type: "pane_process_info", process_info: { pane_id, shell_pid, foregro
 ```
 
 - `shell_pid`: for a Git Bash pane this is the native launcher `Git\bin\bash.exe`, which has no MSYS `/proc` entry; the real MSYS bash is its Windows child.
-- `foreground_process_group_id`: optional; never present on Windows.
+- `foreground_process_group_id`: optional; present on herdr 0.9.5 on Windows and equal to `shell_pid` whether the pane is idle or busy (measured 2026-10-23), so it carries no busy signal there.
 - `foreground_processes[].cwd`: optional; on Windows it does not reliably track a later `cd`.
 
 ## pane.get

@@ -46,6 +46,8 @@ herdr restores its own panes after a restart; the extension never edits herdr's 
 
 A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it, but when the plugin is installed and enabled the extension leaves re-focusing after a launch to it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`, or click the small plug hint directly to the right of the herdr status bar item (the auto-follow toggle) that appears while the plugin is missing or disabled; the hint can be hidden for good.
 
+The plugin also puts each restored pane back in the folder it was last in, working around [herdr issue #5199](https://github.com/herdrdev/herdr/issues/5199). It types `cd '<folder>'` only into idle shells it just restored; see the [plugin README](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md#return-panes-to-their-live-folders).
+
 ## Commands
 
 | Command | Title | Key |

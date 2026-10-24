@@ -97,7 +97,7 @@ Both flag placements work and select the isolated session:
 - `herdr --session probe-p2 workspace focus w3` returned `{"id":"cli:workspace:focus","result":{"type":"workspace_info","workspace":{...,"focused":true,...,"workspace_id":"w3"}}}`.
 - `herdr workspace focus w2 --session probe-p2` returned the same shape for `w2`.
 - Verified with `herdr --session probe-p2 workspace list`: exactly one workspace had `"focused":true`, the requested one, after each call (with and without an attached client). The server log showed `workspace focused ... workspace_id="w3"` and `tab focused`.
-- `HERDR_SESSION` is ignored by `workspace|pane|api` commands (measured 2026-10-20); only the `--session` flag selects the session. Never rely on the environment variable.
+- The CLI picks the session by `--session`, then `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, then the default (measured 2026-10-23); an unknown `HERDR_SESSION` gives `server_not_running` with no fallback. This supersedes the 2026-10-20 note that `HERDR_SESSION` is ignored by `workspace|pane|api` commands, which was likely measured inside a pane whose inherited `HERDR_SOCKET_PATH` outranked it. Pass `--session` on every call anyway.
 
 ### 4. Notification from an action (2026-10-22)
 

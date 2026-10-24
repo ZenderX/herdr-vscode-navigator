@@ -87,7 +87,7 @@ Paste back these output channel lines:
 
 ## Open in VS Code
 
-Isolated: a scratch herdr session and a throwaway VS Code profile. Pass `--session <scratch>` on every herdr `workspace|pane|api|plugin` command; `HERDR_SESSION` is ignored by them. Never run a bare `herdr server stop`.
+Isolated: a scratch herdr session and a throwaway VS Code profile. Pass `--session <scratch>` on every herdr `workspace|pane|api|plugin` command; inside a herdr pane the inherited `HERDR_SOCKET_PATH` outranks `HERDR_SESSION`. Never run a bare `herdr server stop`.
 
 Automated checks (run 2026-10-22, herdr 0.9.5, Windows 11):
 
@@ -124,6 +124,32 @@ Isolated: a scratch herdr session, a scratch home and a scratch state directory.
 7. Delete the state file, create the folder `z3nder.herdr-navigator-0.0.0` under `<scratch-home>\.vscode\extensions`, create a space. Expected: no popup and `decision=installed`.
 8. Dry runs only: `HERDR_NAV_CLIENT=0` makes `scripts/discover.sh --dry-run` (or `discover.ps1 -DryRun`) print `skip:no-client`, and `HERDR_NAV_CLIENT=1` makes it print `show` when the other conditions hold. Never set `HERDR_NAV_CLIENT` on the server, since it skips the real client check.
 9. Cleanup: `herdr session stop <scratch>`, `herdr session delete <scratch>`, `herdr plugin unlink zenderx.herdr-navigator`, delete the scratch home and state directory.
+
+## Return panes to their live folders
+
+Isolated and Windows only: `node scripts/cwd-restore-probe/run.mjs` uses the throwaway session `navigator-restore-probe` and scratch folders `demo app@v1` and `demo app@v1\sub dir` under the temp directory. It links the plugin globally for about 30 seconds, so while it runs your live default session would also run the plugin's hooks if you create a space (`discover.*`) or its server restarts (`cwd-return`). It refuses to start if the session exists, the plugin is already linked or installed, or the state directory already holds files for that session. See `scripts/cwd-restore-probe/README.md`.
+
+What it asserts: after a `cd` into `sub dir` in one pane, the record `cwd-navigator-restore-probe.txt` lists that folder within 15 s; after `herdr session stop` the recorder exits and its lock file is gone within 15 s; after a headless restart the moved pane is back in `sub dir` within 30 s and the control pane stays in its spawn folder; exactly one new `cwd-return` log entry reads `cwd-return: 1 panes returned, 1 skipped (same=1)`; only one `cwd-track` recorder runs for the session and it matches the lock. It exits 0 only when every check passes and prints a JSON summary with paths shown as `<home>`, `<scratch>` and `<user>`; on a failure with the server still up it adds `diagnostics` (the pane list and every `cwd-return` log entry).
+
+Result (2026-10-23, herdr 0.9.5, Windows 11): 8 of 9 consecutive runs passed. On the passing runs the record took 1.3–3.2 s, the recorder exited 6.3–8.9 s after the stop, the moved pane was back 2.5–5.6 s after the restart, and a whole run took 29.5–32.6 s. The very first run failed: the moved pane was not back in `sub dir` within 30 s. Its cause is unknown, because the run had no diagnostics yet; a cold first Git Bash start that ran past the 20 s ready-wait (skip `not-ready`) is possible but not confirmed. Treat an intermittent miss on a cold start as open.
+
+Manual checks run the scripts directly. PowerShell refuses a plain `-File` on a machine with the default execution policy, so pass `-ExecutionPolicy Bypass` as the plugin manifest does:
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -File plugin/scripts/cwd-return.ps1 -DryRun
+```
+
+With `HERDR_SESSION=<scratch>` and `HERDR_NAV_STATE_DIR` (the plugin state directory, or a scratch one holding a `cwd-<scratch>.txt`) set, it prints one `return:<pane>:<folder>` or `skip:<pane>:<reason>` per recorded pane, then `start:tracker` or `skip:tracker-running`, then the summary line, and types nothing. On Linux and macOS use `sh plugin/scripts/cwd-return.sh --dry-run`.
+
+A linked dev run also leaves `discovery.state` in the plugin state directory, written by the existing `discover.*` startup hook; the harness deletes it only if the run created it.
+
+Manual cleanup if a run was interrupted:
+
+1. `herdr session stop navigator-restore-probe`, then `herdr session delete navigator-restore-probe`.
+2. `herdr plugin unlink zenderx.herdr-navigator`.
+3. Under `%LOCALAPPDATA%\herdr\plugins\zenderx.herdr-navigator`, delete `cwd-navigator-restore-probe.*`, `cwd-track-navigator-restore-probe.*` and `focused-navigator-restore-probe.txt` (and `discovery.state` if it was not there before).
+4. `herdr plugin config-dir zenderx.herdr-navigator` prints (and creates) the config folder; delete it if it holds nothing of yours.
+5. Delete the scratch folders under the temp directory.
 
 ## Saved navigator workspace and the jump list
 

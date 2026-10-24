@@ -97,7 +97,7 @@ Each case ran `herdr --session <name> plugin pane open --plugin <id> --entrypoin
 - `tab.created` also fires for the first tab of every new workspace, so a `workspace.created` and a `tab.created` hook would both run for one new space.
 - `workspace.created` and `tab.created` hooks ran with no client attached, and the popup process started there too. Whether such a popup is shown to a client that attaches later was not observed.
 - `startup` did not run again when a client attached to the running server (no `env-startup` file after the attach).
-- Not measured: `startup` on a server that restores existing workspaces with no client attached (the empty-server failure above is `no active workspace`, not a missing client). Whether the popup is drawn on screen was not observed; only the CLI result and the popup process starting were.
+- `startup` on a headless server that restores existing workspaces with no client attached (measured 2026-10-23, herdr 0.9.5, Windows 11): the hook fires about 0.4 s after the restore, with every pane already in `pane list` and its `cwd` in spawn form with a trailing `\`; the shell's first prompt arrives about 4.7 s after the server starts; no `no active workspace` error (that failure above is the empty server, not a missing client). Whether the popup is drawn on screen was not observed; only the CLI result and the popup process starting were.
 
 Event JSON (`HERDR_PLUGIN_EVENT_JSON`) carries ids and labels, not the folder:
 
@@ -106,7 +106,7 @@ Event JSON (`HERDR_PLUGIN_EVENT_JSON`) carries ids and labels, not the folder:
 {"event":"tab_created","data":{"type":"tab_created","tab":{"tab_id":"w3:t1","workspace_id":"w3","number":1,"label":"1","focused":false,"pane_count":1,"agent_status":"unknown"}}}
 ```
 
-The folder comes from `herdr --session <name> pane list --workspace <id>`, whose panes carry `cwd` (24 ms in this run). `herdr workspace get <id>` has no `cwd` (160 ms). The hook environment has no session flag, so the hook passes `--session $HERDR_SESSION` or relies on `HERDR_SOCKET_PATH`.
+The folder comes from `herdr --session <name> pane list --workspace <id>`, whose panes carry `cwd` (24 ms in this run). `herdr workspace get <id>` has no `cwd` (160 ms). The hook environment carries `HERDR_SESSION` and `HERDR_SOCKET_PATH`; the CLI picks the session by `--session`, then `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, then the default (measured 2026-10-23), so the hook passes `--session $HERDR_SESSION` explicitly.
 
 Verdict: yes
 
