@@ -99,12 +99,18 @@ describe("HerdrClient", () => {
       assert.deepEqual(server.requests[0].params, { workspace_id: "w4" });
     });
 
-    it("rejects state-changing methods outside the read-only allowlist without connecting", async () => {
-      server = await startServer(() => undefined);
-      for (const method of ["pane.close", "pane.send_text", "workspace.create", "server.stop"]) {
-        await assert.rejects(new HerdrClient({ pipeName: server.pipeName }).request(method), /not allowed/, method);
+    it("rejects state-changing methods outside the allowlist without connecting and forwards only pane.send_input", async () => {
+      server = await startServer((req, socket) => reply(socket, req.id, { type: "ok" }));
+      const client = new HerdrClient({ pipeName: server.pipeName });
+      for (const method of ["pane.close", "pane.send_text", "pane.send_keys", "workspace.create", "server.stop"]) {
+        await assert.rejects(client.request(method), /not allowed/, method);
       }
       assert.equal(server.connections.length, 0);
+
+      await client.sendInput("w1:p1", "cd 'C:\\a'");
+      assert.equal(server.requests.length, 1);
+      assert.equal(server.requests[0].method, "pane.send_input");
+      assert.deepEqual(server.requests[0].params, { pane_id: "w1:p1", text: "cd 'C:\\a'", keys: ["enter"] });
     });
   });
 

@@ -18,7 +18,7 @@ export const MSYS_CWD_SCRIPT =
   'PATH=/usr/bin:$PATH; [ -x /usr/bin/readlink ] && [ -x /usr/bin/cygpath ] || exit 2; for w in "$@"; do for f in /proc/[0-9]*/winpid; do v=; { read -r v < "$f"; } 2>/dev/null; if [ "$v" = "$w" ]; then d=$(readlink "${f%/winpid}/cwd") || exit 2; cygpath -w "$d" || exit 2; exit 0; fi; done; done; exit 1';
 
 // Prints the Windows pids of the direct children of $root.
-const CHILDREN_SCRIPT =
+export const CHILDREN_SCRIPT =
   "& { param([int]$root) Get-CimInstance Win32_Process -Filter \"ParentProcessId=$root\" | ForEach-Object { $_.ProcessId } }";
 
 const NOT_MSYS = "not an MSYS process";

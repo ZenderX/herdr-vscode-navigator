@@ -46,6 +46,11 @@ export class PluginHint {
     return this.inflight;
   }
 
+  /** The last detection; `unknown` until the first `refresh()` finishes or while herdr is not found. */
+  pluginState(): PluginState {
+    return this.plugin;
+  }
+
   async dismiss(): Promise<void> {
     await this.deps.setDismissed();
     this.apply();

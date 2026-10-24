@@ -8,6 +8,7 @@ Keeps VS Code's Explorer and Source Control on the folder of the pane you have f
 - Follows a `cd` in the focused pane.
 - Snaps to the Git repository root by default, so moving between subfolders of one repository changes nothing.
 - Relaunches herdr when VS Code restores a navigator window.
+- Returns herdr's panes to the folders their shells were in after a herdr server restart.
 - Needs no configuration on Windows, macOS or Linux.
 - With the optional herdr plugin, an "Open in VS Code" action jumps from herdr to this extension. See [Open in VS Code](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/open-in-vscode.md).
 
@@ -42,11 +43,13 @@ The status bar item shows the followed folder, with an open eye when auto-follow
 
 herdr restores its own panes after a restart; the extension never edits herdr's session state.
 
+herdr 0.9.5 restores each pane in the folder it was spawned in, not the one its shell was in ([herdr issue #5199](https://github.com/herdrdev/herdr/issues/5199)). While the navigator window is connected to herdr, the extension records each pane's live folder every 3 seconds, even when herdr runs in another window or terminal. After a herdr server restart it waits for each restored shell's first prompt and types `cd '<folder>'` into idle shells (no agent, no running program) whose folder differs from the record, then logs one `cwd-return:` line in the output channel. This workaround will be removed once herdr restores pane folders itself.
+
 ## Optional herdr plugin
 
 A separate, optional [herdr plugin](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md) restores the last focused space when herdr comes back after a crash, forced kill or reboot. The extension does not depend on it, but when the plugin is installed and enabled the extension leaves re-focusing after a launch to it. Install it with `herdr plugin install ZenderX/herdr-vscode-navigator/plugin`, or click the small plug hint directly to the right of the herdr status bar item (the auto-follow toggle) that appears while the plugin is missing or disabled; the hint can be hidden for good.
 
-The plugin also puts each restored pane back in the folder it was last in, working around [herdr issue #5199](https://github.com/herdrdev/herdr/issues/5199). It types `cd '<folder>'` only into idle shells it just restored; see the [plugin README](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md#return-panes-to-their-live-folders).
+The plugin also puts each restored pane back in the folder it was last in, working around [herdr issue #5199](https://github.com/herdrdev/herdr/issues/5199), for herdr used on its own as well; see the [plugin README](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md#return-panes-to-their-live-folders). Without the plugin the extension returns the panes by itself (see above); when the plugin is installed and enabled, the extension leaves this to the plugin and only logs `cwd-return: deferred to herdr plugin`.
 
 ## Commands
 
@@ -80,6 +83,8 @@ The key binding is a chord because VS Code handles chords even while the herdr t
 - Focus changes work out of the box. Following a `cd` in Git Bash promptly depends on herdr reporting the new directory, which an [optional shell snippet](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/shell-integration.md) provides.
 - herdr runs one server per user, so every window that hosts herdr follows the same focus.
 - In `workspace` mode the empty folder owned by the extension appears as an extra root.
+- Returning panes to their folders needs the shell to report its folder (OSC 7, see above) and draw its first prompt within 20 seconds. It runs only from the navigator window, and only for a server whose panes that window recorded while connected to it. A restart while VS Code is closed is caught on the next start when at least one recorded pane is still in its spawn folder at the extension's first snapshot (a recorded pane once reported a live folder, so its spawn folder means herdr just restored it). If every recorded pane has already drawn its first prompt by then (the extension checks every 3 seconds), the restart cannot be told apart from you changing folder and is missed: the first snapshot is recorded as live folders. herdr exposes no server start time and the record has no timestamp.
+- Right after a return, the record can briefly hold the restored spawn folder until the next check sees the `cd`.
 
 ## Troubleshooting
 
@@ -90,7 +95,7 @@ The key binding is a chord because VS Code handles chords even while the herdr t
 
 ## Privacy
 
-The extension talks only to the local herdr socket. It sends read-only requests, plus `workspace.focus` when auto-launch restores the previously selected space. It collects no telemetry.
+The extension talks only to the local herdr socket. It sends read-only requests, plus `workspace.focus` when auto-launch restores the previously selected space, and `pane.send_input` only to type the guarded `cd '<folder>'` into idle shells herdr just restored (herdr issue #5199). It keeps its record of pane folders in VS Code's global storage. It collects no telemetry.
 
 ## Release notes
 

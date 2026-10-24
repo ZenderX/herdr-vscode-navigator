@@ -170,7 +170,7 @@ function findMsysPs(): string | undefined {
   return msysPs.path;
 }
 
-async function readMsysEdges(): Promise<MsysEdge[]> {
+export async function readMsysEdges(): Promise<MsysEdge[]> {
   const ps = findMsysPs();
   if (!ps) return [];
   try {

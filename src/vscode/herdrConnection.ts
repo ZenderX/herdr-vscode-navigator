@@ -24,6 +24,8 @@ export interface HerdrConnectionDeps {
   onEvent: (event: HerdrEvent) => void;
   /** Runs once per disconnected streak, not on every failed reconnect attempt. */
   onFirstDisconnect: () => void;
+  /** Runs when the subscription starts after a disconnected streak, never on the first connect. */
+  onReconnected: () => void;
 }
 
 export interface HerdrConnection {
@@ -90,9 +92,11 @@ export function createHerdrConnection(deps: HerdrConnectionDeps): HerdrConnectio
     subscription = deps.subscribe(pipeName, FOCUS_SUBSCRIPTIONS, {
       onStarted: () => {
         clearFailureTimer();
+        const reconnected = down;
         down = false;
         connected = true;
         deps.refreshStatus();
+        if (reconnected) deps.onReconnected();
         void deps.requestHosting(true);
         // Events may have been missed while disconnected.
         whenHosting(deps.onFocusEvent);

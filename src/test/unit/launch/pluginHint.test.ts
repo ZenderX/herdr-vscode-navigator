@@ -42,11 +42,15 @@ describe("PluginHint", () => {
       },
       setVisible: (value) => void (visible = value),
     });
+    assert.equal(hint.pluginState(), "unknown");
     await hint.refresh();
     assert.equal(visible, true);
+    assert.equal(hint.pluginState(), "absent");
     plugin = "present";
     await hint.refresh();
     assert.equal(visible, false);
+    // The extension's cwd-return defers to the plugin on this same detection, without a second `plugin list`.
+    assert.equal(hint.pluginState(), "present");
     plugin = "absent";
     await hint.refresh();
     await hint.dismiss();

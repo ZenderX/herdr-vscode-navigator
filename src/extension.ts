@@ -21,7 +21,7 @@ import type { FolderPlan, PendingTarget } from "./follow";
 import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, SessionSnapshot } from "./herdr";
 import { HerdrPresence, handleNotInstalledClick, showsNotInstalled } from "./launch/herdrPresence";
-import { readLease, writeLease } from "./launch/navigatorLease";
+import { isLeaseLive, readLease, writeLease } from "./launch/navigatorLease";
 import { PLUGIN_HINT_DISMISSED_KEY, PluginHint, handlePluginHintClick, installPluginInTerminal } from "./launch/pluginHint";
 import { PENDING_TAKEOVER_MAX_MS } from "./launch/planAutoLaunch";
 import type { WindowKind } from "./launch/planAutoLaunch";
@@ -34,6 +34,9 @@ import { DIAGNOSTIC_TOPICS, channelWriter, createLog, errorText } from "./log";
 import type { DiagnosticLog } from "./log";
 import { samePath } from "./paths";
 import { withTimeout } from "./hosting";
+import { createPaneBusyCheck, nodePaneBusyDeps } from "./restore/paneBusy";
+import { createReturnService, fileRecordStore } from "./restore/returnService";
+import type { ReturnService } from "./restore/returnService";
 import { resolveAnchor } from "./vscode/anchor";
 import { AutoLaunch, SESSION_KEY, sessionMemento } from "./vscode/autoLaunch";
 import { createFollowConsent } from "./vscode/followConsent";
@@ -227,6 +230,7 @@ interface ConnectionEnv {
   autoLaunch: AutoLaunch;
   refreshStatus: () => void;
   warnAutoLaunch: (err: unknown) => void;
+  returnService: ReturnService;
 }
 
 function createConnection(env: ConnectionEnv): HerdrConnection {
@@ -255,6 +259,7 @@ function createConnection(env: ConnectionEnv): HerdrConnection {
         },
       }),
     onFirstDisconnect: () => void env.autoLaunch.onHerdrDisconnected().catch(env.warnAutoLaunch),
+    onReconnected: () => void env.returnService.onReconnected(),
   });
   return connection;
 }
@@ -553,6 +558,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   const probeDeps = nodeProbeDeps(log);
+  const leaseFile = join(context.globalStorageUri.fsPath, LEASE_FILE);
+  // Only the lease-holding navigator window records and returns; other windows share globalStorage.
+  const returnService = createReturnService({
+    platform,
+    log,
+    clock: { ...timers, now: () => Date.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
+    pipeName: socketName,
+    client: (pipeName) => newClient(pipeName),
+    store: fileRecordStore(context.globalStorageUri.fsPath, log),
+    isDirectory: (folder) => probeDeps.isDirectory(folder),
+    connected: () => connection.isConnected(),
+    holdsLease: () => windowKind() === "navigator-saved" && isLeaseLive(readLease(leaseFile), launch, Date.now()),
+    pluginState: () => pluginHint.pluginState(),
+    busyCheck: () => createPaneBusyCheck(nodePaneBusyDeps(log)),
+  });
   const liveProbe = createLiveCwdProbe({ processInfo: (paneId) => newClient().processInfo(paneId) }, probeDeps);
   const controller = createController({
     liveProbe,
@@ -571,6 +591,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshStatus: (tracked) => refreshStatus(tracked),
     onSnapshot: (snapshot) => {
       poller.observe(snapshot);
+      returnService.observeSnapshot(snapshot);
       void autoLaunch.observeSnapshot(snapshot).catch(warnAutoLaunch);
       refreshWindowTitle(focusedLabel(snapshot));
     },
@@ -598,6 +619,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     autoLaunch,
     refreshStatus: () => refreshStatus(),
     warnAutoLaunch,
+    returnService,
   });
 
   function refreshStatus(tracked: string | null = controller.getState().trackedPath): void {
@@ -643,6 +665,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.onDidStartTerminalShellExecution(commandStart.onCommandStart),
     statusBar,
     { dispose: connection.stop },
+    { dispose: () => returnService.stop() },
     { dispose: () => poller.stop() },
     { dispose: () => controller.dispose() },
     { dispose: () => hostingMonitor.dispose() },
@@ -675,6 +698,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   refreshWindowTitle();
   autoLaunch.start();
   connection.start();
+  returnService.start();
   void requestHosting(true);
 }
 

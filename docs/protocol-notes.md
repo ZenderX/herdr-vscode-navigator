@@ -9,21 +9,24 @@ herdr's own session restore is the source of truth. Nothing in `src/` or `plugin
 - writes or renames herdr's `session.json` or anything else under herdr's config dir;
 - stops or starts the herdr server;
 - creates, closes or renames workspaces, tabs or panes;
-- types into panes, with one exception for `plugin/` below.
+- types into panes, with one scoped exception, the same for `plugin/` and `src/`, below.
 
-The one exception: the plugin's `cwd-return` startup hook may run `herdr pane run <pane> "cd '<folder>'"`, and nothing else, into a pane herdr restored moments ago, only when all of these hold: the pane is in the plugin's record and its recorded folder exists; its current `cwd` differs from the recorded folder; it has no `agent` or `agent_session` key; its shell has drawn its first prompt (`cwd` no longer in spawn form with a trailing separator); and its shell runs no other program (Windows: Git's MSYS `ps.exe -l` shows no child of the pane's bash; Unix, inferred and not measured: `pane process-info` shows no `foreground_process_group_id` other than `shell_pid` and at most one foreground process). This works around herdr issue #5199 (https://github.com/herdrdev/herdr/issues/5199), herdr 0.9.5 restoring spawn folders instead of live ones, and is to be removed once herdr persists the live cwd. The extension (`src/`) never types into panes and stays fully read-only.
+The one exception: the plugin's `cwd-return` startup hook may run `herdr pane run <pane> "cd '<folder>'"`, and nothing else, into a pane herdr restored moments ago, only when all of these hold: the pane is in the plugin's record and its recorded folder exists; its current `cwd` differs from the recorded folder; it has no `agent` or `agent_session` key; its shell has drawn its first prompt (`cwd` no longer in spawn form with a trailing separator); and its shell runs no other program (Windows: Git's MSYS `ps.exe -l` shows no child of the pane's bash; Unix, inferred and not measured: `pane process-info` shows no `foreground_process_group_id` other than `shell_pid` and at most one foreground process). This works around herdr issue #5199 (https://github.com/herdrdev/herdr/issues/5199), herdr 0.9.5 restoring spawn folders instead of live ones, and is to be removed once herdr persists the live cwd.
+
+The extension (`src/`) has the same exception, with the same scope and guard, for when the plugin is not there: it may send the socket request `pane.send_input` with `cd '<folder>'` plus Enter, and nothing else, into a pane herdr restored moments ago. It acts only from the navigator window that holds the navigator lease, only when `herdr plugin list --json` did not report the plugin installed and enabled (a `present` result defers to the plugin; `absent` or `unknown` acts), only after it saw a restart (the socket was lost and came back, or the first snapshot after activation has at least one recorded pane still in spawn form; unrecorded panes never count), and only when the record it keeps while that window is connected to herdr is not empty. Each pane must pass the plugin's guard above (recorded folder exists, current `cwd` differs, no `agent`/`agent_session`, first prompt drawn, no child under the shell, with the same MSYS `ps` check on Windows); an `ok` response only means herdr queued the input, not that it ran (https://herdr.dev/docs/socket-api), so the extension relies on its next snapshot to see the new `cwd`. It works around herdr #5199 too, and the feature and the `pane.send_input` allowlist entry are to be removed once herdr restores pane cwds itself.
 
 Allowed herdr interactions, and nothing else:
 
 - Read-only socket requests: `ping`, `session.snapshot`, `pane.get`, `pane.list`, `pane.process_info`, `events.subscribe`.
 - Read-only CLI calls: `herdr workspace list`, `herdr pane list`, `herdr plugin list`.
-- `workspace.focus`, the only state-changing socket request; it changes focus only (see below).
+- `workspace.focus`, a state-changing socket request that changes focus only (see below).
+- `pane.send_input` with `{pane_id, text: "cd '<folder>'", keys: ["enter"]}`, the extension's guarded return into idle restored shells (the exception above); no other input method (`pane.send_text`, `pane.send_keys`) is allowed.
 - The auto-launch the user turned on (`herdrNavigator.autoLaunch`) or a status bar click starting a `herdr` client in a VS Code terminal.
 - The Install click of the plugin hint, typing `herdr plugin install ZenderX/herdr-vscode-navigator/plugin` into a visible VS Code terminal, where herdr asks the user to confirm.
 - The `vscode://` open link starting a `herdr [--session <s>]` client terminal and running `herdr [--session <s>] workspace focus <id>`.
 - The plugin's `herdr workspace focus` on the remembered space at startup, its `herdr notification show`, its transient discovery popup (`herdr plugin pane open --placement popup`, a plugin pane, not a user pane), its guarded `herdr pane run <pane> "cd '<folder>'"` at startup (the exception above), its `herdr pane list` polling every few seconds by the detached `cwd-track` recorder and `herdr pane process-info` reads for the guard, and its own state files under the directory herdr provides as `HERDR_PLUGIN_STATE_DIR` (including `cwd-<session>.txt`, `cwd-track-<session>.pid` and, after a recorder error, `cwd-track-<session>.err`).
 
-The extension's own files in VS Code's global storage (`navigator-lease.json`, the `anchor/` folder, the navigator workspace file) are not herdr state.
+The extension's own files in VS Code's global storage (`navigator-lease.json`, the `anchor/` folder, the navigator workspace file, and the live-folder record `cwd-return-<key>.json`, one per herdr pipe) are not herdr state.
 
 ## Pipe
 
@@ -92,11 +95,19 @@ Request: `{"id":"x","method":"pane.get","params":{"pane_id":"w1:p1"}}`. Response
 
 ## workspace.focus
 
-Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no live request was sent. This is the only socket request the extension sends that changes herdr state, and it changes focus only (used by auto-launch to re-select a space).
+Verified against herdr 0.9.5 (protocol 22) from `herdr api schema --json`; no live request was sent. Besides the guarded `pane.send_input` below, this is the only socket request the extension sends that changes herdr state, and it changes focus only (used by auto-launch to re-select a space).
 
 - Request: `{ "id": "<id>", "method": "workspace.focus", "params": { "workspace_id": "<id>" } }` (`params` is `WorkspaceTarget`, `workspace_id` required string).
 - Response: success result type not isolated in the schema (likely `workspace_info`); the client ignores the payload and rejects on an error envelope.
 - Ids such as `w4` are not stable across a herdr restore, so the extension stores the workspace `label` and maps it to an id from `session.snapshot` before focusing.
+
+## pane.send_input
+
+Captured 2026-10-24 against herdr 0.9.5 (protocol 22) on a throwaway session. The method behind `herdr pane run`; the extension sends it only for the guarded return (see the hard invariant).
+
+- Request: `{"id":"<id>","method":"pane.send_input","params":{"pane_id":"w1:p1","text":"cd '<folder>'","keys":["enter"]}}` (`PaneSendInputParams`: `pane_id` required, `text` and `keys` optional). Pane ids are the public `wN:pN` form.
+- Response: `{"id":"<id>","result":{"type":"ok"}}`. herdr's docs say an `ok` acknowledges queue admission, not execution.
+- Unknown pane: `{"error":{"code":"pane_not_found","message":"pane <id> not found"}}`; a bad key name: `invalid_key`. The extension counts a failed send as a skip with reason `error`.
 
 ## session.json (schema version 3)
 

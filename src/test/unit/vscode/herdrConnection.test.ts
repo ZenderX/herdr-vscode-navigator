@@ -6,7 +6,7 @@ import { createHerdrConnection } from "../../../vscode/herdrConnection";
 function setup() {
   const handlers: SubscriptionHandlers[] = [];
   const timers: Array<{ fn: () => void; cleared: boolean }> = [];
-  const calls = { firstDisconnect: 0, warned: 0 };
+  const calls = { firstDisconnect: 0, warned: 0, reconnected: 0 };
   const connection = createHerdrConnection({
     pipeName: () => "pipe",
     subscribe: (_pipe, _topics, h) => {
@@ -34,6 +34,7 @@ function setup() {
     onFocusEvent: () => undefined,
     onEvent: () => undefined,
     onFirstDisconnect: () => void calls.firstDisconnect++,
+    onReconnected: () => void calls.reconnected++,
   });
   return { connection, handlers, timers, calls };
 }
@@ -43,6 +44,9 @@ describe("herdrConnection", () => {
     const t = setup();
     t.connection.start();
     const h = t.handlers[0];
+    // A first connect is not a server restart; only a start after a lost socket is.
+    h?.onStarted?.();
+    assert.equal(t.calls.reconnected, 0);
     h?.onDisconnected?.("refused");
     h?.onDisconnected?.("refused");
     assert.equal(t.calls.firstDisconnect, 1);
@@ -51,6 +55,7 @@ describe("herdrConnection", () => {
     assert.equal(t.calls.warned, 1);
     h?.onStarted?.();
     assert.equal(t.connection.isConnected(), true);
+    assert.equal(t.calls.reconnected, 1);
     assert.equal(t.timers[0]?.cleared, true);
     h?.onDisconnected?.("closed");
     assert.equal(t.calls.firstDisconnect, 2);

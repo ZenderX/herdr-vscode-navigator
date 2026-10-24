@@ -13,10 +13,11 @@ import type {
   SubscriptionHandlers,
 } from "./types";
 
-// Read-only methods plus workspace.focus (focus only; never mutates herdr content).
+// Read-only plus workspace.focus and pane.send_input, scoped to the guarded `cd` into idle restored shells (docs/protocol-notes.md).
 const ALLOWED_METHODS: ReadonlySet<string> = new Set([
   "ping",
   "workspace.focus",
+  "pane.send_input",
   "session.snapshot",
   "pane.get",
   "pane.list",
@@ -154,6 +155,11 @@ export class HerdrClient {
 
   async focusWorkspace(workspaceId: string, options?: RequestOptions): Promise<void> {
     await this.request("workspace.focus", { workspace_id: workspaceId }, options);
+  }
+
+  /** Types `text` then Enter into one pane; herdr's `ok` means queued, not executed, so callers re-read `cwd` to confirm. */
+  async sendInput(paneId: string, text: string, options?: RequestOptions): Promise<void> {
+    await this.request("pane.send_input", { pane_id: paneId, text, keys: ["enter"] }, options);
   }
 
   /** Long-lived subscription that reconnects with jittered exponential backoff until disposed. */

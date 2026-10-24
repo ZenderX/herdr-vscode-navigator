@@ -151,6 +151,25 @@ Manual cleanup if a run was interrupted:
 4. `herdr plugin config-dir zenderx.herdr-navigator` prints (and creates) the config folder; delete it if it holds nothing of yours.
 5. Delete the scratch folders under the temp directory.
 
+## Return panes to their live folders (extension only)
+
+Not isolated, and no script automates it: end-to-end isolation is impossible for the extension, because it talks only to the default herdr socket (or `herdrNavigator.socketPath`) and auto-launch runs a bare `herdr`. Unit tests cover the decision logic only, so you run this by hand against your own session. It stops and restarts your herdr server, so save work in every pane first. herdr #5199 is the reason this feature exists.
+
+Precondition: the herdr plugin is not installed or is disabled (`herdr plugin list`), and Git Bash panes report their folder (see `docs/shell-integration.md`).
+
+1. Press F5 (Run Extension). In the Extension Development Host, make it the navigator window and connect it to a running herdr server (steps 1 to 3 of the first section, or the status bar click). Recording needs only the navigator lease and the connection; the window does not have to run herdr in its own terminal.
+2. In two panes, `cd` into folders other than the ones they were spawned in. In a third pane, stay in the spawn folder. Wait at least 5 seconds so the 3 s record poll sees the folders.
+3. From a separate terminal outside herdr, run `herdr server stop`, then start herdr again (`herdr` in the navigator window's terminal, or let auto-launch do it).
+   Expected: within about 20 seconds of the restore, the two moved panes show their recorded folders again and the third is untouched. The "Herdr Navigator" output channel has exactly one new line `cwd-return: 2 panes returned, 1 skipped (same=1)` (counts vary with your panes; skip reasons are `no-pane`, `same`, `missing-folder`, `agent`, `not-ready`, `busy`, `error`). No notification or status bar item appears.
+4. Agent pane: before the stop, run an agent in a pane you moved, then repeat step 3.
+   Expected: that pane is skipped as `agent` and nothing is typed into it.
+5. Deferral: enable the plugin (`herdr plugin list` shows it enabled), reload the Extension Development Host, `cd` in a pane, and repeat step 3.
+   Expected: the output channel has `cwd-return: deferred to herdr plugin`, the extension types nothing, and the plugin's own `cwd-return` line appears in `herdr plugin log list`.
+
+Known limits: only the window holding the navigator lease acts, and only when its record for that server is non-empty (it records every 3 s while that window is connected to herdr). A restart while VS Code is closed is handled on the next activation when at least one recorded pane is still in spawn form at the first snapshot; panes absent from the record (for example Git Bash without OSC 7) never count. If every recorded pane has drawn its first prompt before the first snapshot (it can come in under 3 s on a fast machine), the restart is indistinguishable from a `cd` and is missed: that snapshot is recorded as live folders. herdr exposes no server start time and the record has no timestamp. The busy check can add a `warn` line when `ps` or PowerShell fails or times out, and then treats the pane as idle. Right after a `cd` is sent, the next 3 s poll can briefly record the restored home folder; the poll after that corrects it.
+
+Paste back the `cwd-return:` lines and any `cwd-return: record ...` or `busy check` warnings.
+
 ## Saved navigator workspace and the jump list
 
 Manual checks only; no script automates these scenarios. Needs herdr on PATH and the installed VSIX in a normal window, not F5. The navigator workspace is `navigator.code-workspace` in the extension's global storage, in the `anchor` folder.
