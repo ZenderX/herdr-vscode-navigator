@@ -1,6 +1,6 @@
 import { normalizeCwd } from "../paths";
-import { createShellCwdProbe } from "./shellCwd";
-import type { CwdOrigin, FailedAttempt, ProbeDeps, ProbeResult, ProbeSettings, ResolvedCwd } from "./types";
+import { createMsysBatchProbe, createShellCwdProbe } from "./shellCwd";
+import type { CwdOrigin, FailedAttempt, MsysCwdBatch, ProbeDeps, ProbeResult, ProbeSettings, ResolvedCwd, ShellPane } from "./types";
 
 export interface PaneCwdFields {
   cwd?: string | null;
@@ -45,10 +45,16 @@ export function resolveCwd(
 export interface LiveCwdProbe {
   /** Never rejects; concurrent calls for one pane share a single in-flight probe. */
   probe(paneId: string, settings: ProbeSettings): Promise<ProbeResult>;
+  /**
+   * Windows Git Bash live folders for many panes from one MSYS scan; concurrent calls share the in-flight scan.
+   * Rejects when Git Bash is missing or the scan or child lookup fails; off Windows every pane maps to undefined.
+   */
+  probeShells(panes: readonly ShellPane[], settings: Pick<ProbeSettings, "gitBashPath">): Promise<MsysCwdBatch>;
 }
 
 export function createLiveCwdProbe(client: ShellPidSource, deps: ProbeDeps): LiveCwdProbe {
   const probeShell = createShellCwdProbe(deps);
+  const probeBatch = createMsysBatchProbe(deps);
   const inflight = new Map<string, Promise<ProbeResult>>();
 
   const run = async (paneId: string, settings: ProbeSettings): Promise<ProbeResult> => {
@@ -68,5 +74,6 @@ export function createLiveCwdProbe(client: ShellPidSource, deps: ProbeDeps): Liv
       inflight.set(paneId, started);
       return started;
     },
+    probeShells: (panes, { gitBashPath }) => probeBatch(panes, gitBashPath),
   };
 }

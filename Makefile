@@ -23,4 +23,4 @@ link-plugin:
 unlink-plugin:
 	herdr plugin unlink zenderx.herdr-navigator
 	@echo "Note: the plugin's saved record stays in %LOCALAPPDATA%\herdr\plugins\zenderx.herdr-navigator"
-	@echo "Note: so do its cwd-<session>.txt, cwd-track-<session>.pid and cwd-track-<session>.err files; a running cwd-track exits once its server stops"
+	@echo "Note: so do its cwd-<session>.txt and cwd-<session>.txt.lock files"

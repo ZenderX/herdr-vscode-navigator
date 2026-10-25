@@ -25,7 +25,7 @@ export interface LiveCwdOptions {
 }
 
 const HINT =
-  "hint: target is herdr's reported cwd, which may be the stale spawn directory; see herdrNavigator.liveCwdProbe, herdrNavigator.gitBashPath and docs/shell-integration.md";
+  "hint: target is herdr's reported cwd, which may be the stale spawn directory; check the herdrNavigator.liveCwdProbe and herdrNavigator.gitBashPath settings";
 
 export interface FollowControllerOptions {
   platform: NodeJS.Platform;

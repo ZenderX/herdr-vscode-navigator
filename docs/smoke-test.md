@@ -127,11 +127,32 @@ Isolated: a scratch herdr session, a scratch home and a scratch state directory.
 
 ## Return panes to their live folders
 
-Isolated and Windows only: `node scripts/cwd-restore-probe/run.mjs` uses the throwaway session `navigator-restore-probe` and scratch folders `demo app@v1` and `demo app@v1\sub dir` under the temp directory. It links the plugin globally for about 30 seconds, so while it runs your live default session would also run the plugin's hooks if you create a space (`discover.*`) or its server restarts (`cwd-return`). It refuses to start if the session exists, the plugin is already linked or installed, or the state directory already holds files for that session. See `scripts/cwd-restore-probe/README.md`.
+Isolated and Windows only: `npm run compile`, then `node scripts/cwd-restore-probe/run.mjs`. It uses the throwaway session `navigator-restore-probe` with a scratch herdr config (`HERDR_CONFIG_PATH`) and a scratch `HOME` whose prompt emits no OSC 7 and sets no title, so it proves the feature with no shell configuration; your herdr config and shell startup files are neither read nor edited. Its scratch folders `demo app@v1` and `demo app@v1\sub dir` live under the temp directory. It links the plugin globally for about a minute and a half, so while it runs your live default session would also run the plugin's hooks if you create a space (`discover.*`) or its server restarts (`cwd-return`). It refuses to start if the session exists, the plugin is already linked or installed, or the state directory already holds files for that session. See `scripts/cwd-restore-probe/README.md`.
 
-What it asserts: after a `cd` into `sub dir` in one pane, the record `cwd-navigator-restore-probe.txt` lists that folder within 15 s; after `herdr session stop` the recorder exits and its lock file is gone within 15 s; after a headless restart the moved pane is back in `sub dir` within 30 s and the control pane stays in its spawn folder; exactly one new `cwd-return` log entry reads `cwd-return: 1 panes returned, 1 skipped (same=1)`; only one `cwd-track` recorder runs for the session and it matches the lock. It exits 0 only when every check passes and prints a JSON summary with paths shown as `<home>`, `<scratch>` and `<user>`; on a failure with the server still up it adds `diagnostics` (the pane list and every `cwd-return` log entry).
+What it asserts (row names as in the script): every `cwd-record` hook run succeeded and `cwd-return`'s first start wrote the server-run stamp `cwd-navigator-restore-probe.instance`; then:
 
-Result (2026-10-23, herdr 0.9.5, Windows 11): 8 of 9 consecutive runs passed. On the passing runs the record took 1.3–3.2 s, the recorder exited 6.3–8.9 s after the stop, the moved pane was back 2.5–5.6 s after the restart, and a whole run took 29.5–32.6 s. The very first run failed: the moved pane was not back in `sub dir` within 30 s. Its cause is unknown, because the run had no diagnostics yet; a cold first Git Bash start that ran past the 20 s ready-wait (skip `not-ready`) is possible but not confirmed. Treat an intermittent miss on a cold start as open.
+- `burst`: six `workspace create`s and six `pane split`s back to back (14 Git Bash panes), then one focus: no hook fails or logs `stayed locked`, and the steady-state hook time at 14 panes stays within 2 s and within 1.5 times the time at 2 panes;
+- `seed`: each line of `cwd-navigator-restore-probe.txt` is `<pane>\t<live>\t<spawn>\t<pid>\t<msys>`;
+- `legacy`: a two-column line gets its spawn folder and pids at the next hook;
+- `no-timer`: after a `cd` into `sub dir`, the record still does not list it 4 s later, because no hook event happened (nothing polls);
+- `record-on-hook`: after one `herdr workspace focus`, the record holds `sub dir`, read from the MSYS shell, while `herdr pane list` `cwd` is still the spawn folder;
+- `title-push`: a `cd` under Git's stock prompt pushes one `pane_updated` with the spawn-form `cwd`, on which the extension's batch probe reads `sub dir`; the plugin's line keeps the spawn folder (it has no hook for that push);
+- `gap` (known limit): a `cd` under the title-less prompt with no later event leaves the record at the earlier folder; after the restart that pane is `same` and stays in its spawn folder;
+- `unknown-spawn`, `mismatch`: a line without a spawn folder, and one with another spawn folder, written right before the stop, are skipped and stay in herdr's folder;
+- `return`: after `herdr session stop` and a headless restart, exactly one new `cwd-return` entry reads `cwd-return: 1 panes returned, 5 skipped (same=3, unknown-spawn=1, mismatch=1)`, it ran within the 20 s ready timeout (no prompt wait), and `pwd -W` in the restored `moved` pane prints `sub dir`;
+- `launcher-cwd`: the Git Bash pane's `process-info` cwd before the stop equals its restored spawn-form reading;
+- `record-after`: the record holds each restored pane's spawn folder and new pids;
+- `powershell`: a Windows PowerShell 5.1 pane, after `Set-Location`, a focus hook and a restart, is restored in its live folder by herdr itself, and `cwd-return` logs `cwd-return: 0 panes returned, 2 skipped (same=2)`.
+
+At no point does a `cwd-track` process or a `.pid` or `.err` file exist. It exits 0 only when every check passes and prints a JSON summary with paths shown as `<home>`, `<scratch>` and `<user>`; on a failure with the server still up it adds `diagnostics` (the pane list and every `cwd-return` log entry).
+
+Result (2026-10-24, herdr 0.9.5, Windows 11, no shell configuration): passed, 78–84 s per run. Against the previous `cwd-record.ps1` the `burst` row failed: 5 or 6 of its 12 hooks ended `failed` with `stayed locked for 10 s`. An earlier polling recorder (2026-10-23) once missed a cold-start return (cause unknown, possibly a Git Bash start past the 20 s ready wait); it was not reproduced, so treat an intermittent miss on a cold start as open.
+
+`node scripts/cwd-restore-probe/listen.mjs` (scratch session `navigator-listen-probe`, the same scratch config and `HOME`) measures what herdr pushes after a `cd` with no shell configuration. 2026-10-24: under Git's stock prompt one `pane_updated` 360 ms after `pane run` started, with the spawn-form `cwd` and the title `MINGW64:<path>`; under a title-less prompt and in PowerShell, nothing.
+
+Linux: `bash scripts/cwd-restore-probe/linux/run.sh` (needs Docker Desktop running) runs the sh scripts against herdr 0.9.5 in a throwaway Debian container, about 15 s per run. 2026-10-24: every row passed (`record-on-hook`, `return`, `unknown-spawn`, `mismatch`, `same` and the rest), log `cwd-return: 1 panes returned, 3 skipped (same=1, unknown-spawn=1, mismatch=1)`. On Linux herdr restores the live folder itself, so with an up-to-date record every pane is `same`. See `scripts/cwd-restore-probe/linux/README.md`.
+
+macOS: untested. It needs a Mac or a macOS CI runner with herdr 0.9.5; the same container rows would run there under `/bin/sh` with two small changes to the probe.
 
 Manual checks run the scripts directly. PowerShell refuses a plain `-File` on a machine with the default execution policy, so pass `-ExecutionPolicy Bypass` as the plugin manifest does:
 
@@ -139,7 +160,7 @@ Manual checks run the scripts directly. PowerShell refuses a plain `-File` on a 
 powershell -NoProfile -ExecutionPolicy Bypass -File plugin/scripts/cwd-return.ps1 -DryRun
 ```
 
-With `HERDR_SESSION=<scratch>` and `HERDR_NAV_STATE_DIR` (the plugin state directory, or a scratch one holding a `cwd-<scratch>.txt`) set, it prints one `return:<pane>:<folder>` or `skip:<pane>:<reason>` per recorded pane, then `start:tracker` or `skip:tracker-running`, then the summary line, and types nothing. On Linux and macOS use `sh plugin/scripts/cwd-return.sh --dry-run`.
+With `HERDR_SESSION=<scratch>` and `HERDR_NAV_STATE_DIR` (the plugin state directory, or a scratch one holding a `cwd-<scratch>.txt`) set, it prints one `return:<pane>:<folder>` or `skip:<pane>:<reason>` per recorded pane (reasons in order `no-pane`, `same`, `unknown-spawn`, `mismatch`, `missing-folder`, `agent`, `not-ready`, `busy`), then the summary line, and neither types nor records anything. On Linux and macOS use `sh plugin/scripts/cwd-return.sh --dry-run`.
 
 A linked dev run also leaves `discovery.state` in the plugin state directory, written by the existing `discover.*` startup hook; the harness deletes it only if the run created it.
 
@@ -147,7 +168,7 @@ Manual cleanup if a run was interrupted:
 
 1. `herdr session stop navigator-restore-probe`, then `herdr session delete navigator-restore-probe`.
 2. `herdr plugin unlink zenderx.herdr-navigator`.
-3. Under `%LOCALAPPDATA%\herdr\plugins\zenderx.herdr-navigator`, delete `cwd-navigator-restore-probe.*`, `cwd-track-navigator-restore-probe.*` and `focused-navigator-restore-probe.txt` (and `discovery.state` if it was not there before).
+3. Under `%LOCALAPPDATA%\herdr\plugins\zenderx.herdr-navigator`, delete `cwd-navigator-restore-probe.*` and `focused-navigator-restore-probe.txt` (and `discovery.state` if it was not there before).
 4. `herdr plugin config-dir zenderx.herdr-navigator` prints (and creates) the config folder; delete it if it holds nothing of yours.
 5. Delete the scratch folders under the temp directory.
 
@@ -155,20 +176,34 @@ Manual cleanup if a run was interrupted:
 
 Not isolated, and no script automates it: end-to-end isolation is impossible for the extension, because it talks only to the default herdr socket (or `herdrNavigator.socketPath`) and auto-launch runs a bare `herdr`. Unit tests cover the decision logic only, so you run this by hand against your own session. It stops and restarts your herdr server, so save work in every pane first. herdr #5199 is the reason this feature exists.
 
-Precondition: the herdr plugin is not installed or is disabled (`herdr plugin list`), and Git Bash panes report their folder (see `docs/shell-integration.md`).
+Precondition: the herdr plugin is not installed or is disabled (`herdr plugin list`). No shell configuration is needed.
 
 1. Press F5 (Run Extension). In the Extension Development Host, make it the navigator window and connect it to a running herdr server (steps 1 to 3 of the first section, or the status bar click). Recording needs only the navigator lease and the connection; the window does not have to run herdr in its own terminal.
-2. In two panes, `cd` into folders other than the ones they were spawned in. In a third pane, stay in the spawn folder. Wait at least 5 seconds so the 3 s record poll sees the folders.
+2. In two panes, `cd` into folders other than the ones they were spawned in. In a third pane, stay in the spawn folder. Then switch to another pane, tab or space once: every focus change records all panes, with Git Bash folders read from the MSYS shell. Under Git's stock prompt the `cd` alone is already recorded through its title push; under a prompt that sets no title it is not, until that switch.
 3. From a separate terminal outside herdr, run `herdr server stop`, then start herdr again (`herdr` in the navigator window's terminal, or let auto-launch do it).
-   Expected: within about 20 seconds of the restore, the two moved panes show their recorded folders again and the third is untouched. The "Herdr Navigator" output channel has exactly one new line `cwd-return: 2 panes returned, 1 skipped (same=1)` (counts vary with your panes; skip reasons are `no-pane`, `same`, `missing-folder`, `agent`, `not-ready`, `busy`, `error`). No notification or status bar item appears.
+   Expected: within a few seconds of the restore (Git Bash panes need no prompt; the wait is capped at 20 seconds), the two moved panes show their recorded folders again and the third is untouched. The "Herdr Navigator" output channel has exactly one new line `cwd-return: 2 panes returned, 1 skipped (same=1)` (counts vary with your panes; skip reasons are `no-pane`, `same`, `unknown-spawn`, `mismatch`, `missing-folder`, `agent`, `not-ready`, `busy`, `error`). No notification or status bar item appears.
+   Spawn check: a reconnect several seconds after the restart still checks each pane, because the restored pane's spawn folder comes from the same `pane.process_info` the busy check reads. A pane whose stored spawn folder is missing (for example a record written by 0.1.3 that the new build has not yet seen at a normal connect) is skipped as `unknown-spawn` and stays where herdr put it; nothing is typed into it.
 4. Agent pane: before the stop, run an agent in a pane you moved, then repeat step 3.
    Expected: that pane is skipped as `agent` and nothing is typed into it.
 5. Deferral: enable the plugin (`herdr plugin list` shows it enabled), reload the Extension Development Host, `cd` in a pane, and repeat step 3.
    Expected: the output channel has `cwd-return: deferred to herdr plugin`, the extension types nothing, and the plugin's own `cwd-return` line appears in `herdr plugin log list`.
 
-Known limits: only the window holding the navigator lease acts, and only when its record for that server is non-empty (it records every 3 s while that window is connected to herdr). A restart while VS Code is closed is handled on the next activation when at least one recorded pane is still in spawn form at the first snapshot; panes absent from the record (for example Git Bash without OSC 7) never count. If every recorded pane has drawn its first prompt before the first snapshot (it can come in under 3 s on a fast machine), the restart is indistinguishable from a `cd` and is missed: that snapshot is recorded as live folders. herdr exposes no server start time and the record has no timestamp. The busy check can add a `warn` line when `ps` or PowerShell fails or times out, and then treats the pane as idle. Right after a `cd` is sent, the next 3 s poll can briefly record the restored home folder; the poll after that corrects it.
+Known limits: only the window holding the navigator lease acts, and only when its record for that server is non-empty. It records while that window is connected to herdr, without polling: from `pane_updated`, `pane_created` and `pane_moved` pushes, dropping panes on `pane_closed`, `pane_exited` and `pane_moved`, and from a full snapshot on connect, on each space, tab or pane focus change, on a tab or space close and after a return; Windows Git Bash folders are read from the MSYS shell on those events, never on a timer. A `cd` under a prompt that sets no title (starship, a custom `PS1`) pushes nothing, so a `cd` there followed by a stop with no other event is missed and the pane returns to its earlier recorded folder or stays in its spawn folder (herdr #5199 is the source fix). PowerShell panes are restored in their live folder by herdr itself and are normally `same`. A restart while VS Code is closed is handled on the next activation when a recorded pane's shell pid differs from the `shell_pid` herdr reports now; the first activation after upgrading misses it, because the old record has no pids. A failed Git Bash probe logs `cwd-return: Git Bash folder probe failed: ...` at `warn`; during a return those panes then end `not-ready` after the 20 s cap. The busy check can add a `warn` line when `ps` or PowerShell fails or times out, and then treats the pane as idle. After a return the extension keeps the recorded folder for each pane it sent a `cd`, so the restored spawn folder is not recorded over it. When the return was left to the plugin, a `pane_updated` from a restored shell before the plugin's `cd` can briefly record the spawn folder; the next update corrects it.
 
 Paste back the `cwd-return:` lines and any `cwd-return: record ...` or `busy check` warnings.
+
+### Upgrade and verify
+
+Why panes such as `<pane a>`, `<pane b>` and `<pane c>` came back in the wrong folders after an earlier restart: that restart happened before the return feature existed. The installed VSIX was still 0.1.3, the 3 s polling build, and the plugin was not installed, so no return code ran, and herdr restored the Git Bash panes into their spawn folders (issue #5199). So the fix is to install the new build, not to change code. Nothing needs to be added to `~/.bashrc`, `$PROFILE`, any other shell startup file or herdr's config; if you added an earlier snippet to `~/.bashrc` or `$PROFILE`, you may remove it, nothing uses it.
+
+1. Install the new extension build from this checkout: `make reinstall`. It runs `npm run package` (`vscode:prepublish` compiles first) and then `code --install-extension herdr-navigator-<version>.vsix --force`. Reload every VS Code window.
+2. Before herdr's next restart, let the navigator window connect to the running herdr server once (the status bar shows a folder, not `herdr: disconnected`). This normal connect is when the old v1 record gets its spawn folders and shell pids from `pane.process_info`. If herdr restarts before that, every pane in the old record is skipped as `unknown-spawn` and stays in herdr's folder, and a restart while VS Code was closed is not detected at all, because the old record has no pids. That is safe, but those panes are not returned.
+3. Plugin (recommended; with it, the extension defers): `make link-plugin` (or `herdr plugin install ZenderX/herdr-vscode-navigator/plugin` once it is published), then check that `herdr plugin list` shows `zenderx.herdr-navigator` enabled. Then switch space, tab or pane once, so a `cwd-record` hook records every pane with its spawn folder and shell pid.
+
+Verify:
+
+1. Extension: the "Herdr Navigator" output channel. Expected: after a herdr restart, one line `cwd-return: <n> panes returned, <m> skipped (...)`, or `cwd-return: deferred to herdr plugin` when the plugin is enabled. Before that restart, the record `cwd-return-<key>.json` in the extension's global storage (`%APPDATA%\Code\User\globalStorage\z3nder.herdr-navigator\`) reads `"version": 2` and has a `spawn` and a `shellPid` for each pane.
+2. Plugin: `%LOCALAPPDATA%\herdr\plugins\zenderx.herdr-navigator\cwd-default.txt`. Expected: one line per pane, `<pane>`, live folder, spawn folder, shell pid and, for a Git Bash pane, herdr's shell pid, tab-separated. After a `cd` and a space switch, the pane's live folder is the new one, while `herdr pane list` still shows the Git Bash pane's spawn folder. After the next herdr restart, `herdr plugin log list` shows one `cwd-return:` line, and the moved panes are back in their folders.
 
 ## Saved navigator workspace and the jump list
 
@@ -203,6 +238,5 @@ If the source is `cwd` and the directory is stale, a `hint:` line appears. Then,
 
 - Make sure `herdrNavigator.liveCwdProbe` is `true` (default).
 - On Windows, if Git Bash is installed somewhere unusual, set `herdrNavigator.gitBashPath` to its `usr\bin\bash.exe`. Empty means auto-detect. Check `failed=[...]` in the `target:` line for `Git Bash not found` or `not an MSYS process`.
-- As a last resort add the optional snippet from `docs/shell-integration.md`.
 
-A pane in native PowerShell reports `via cwd` correctly, because herdr injects its own shell integration there; the hint is then harmless.
+A pane in native PowerShell reports `via cwd` correctly, because herdr injects its own shell integration there (OSC 9;9); the hint is then harmless.

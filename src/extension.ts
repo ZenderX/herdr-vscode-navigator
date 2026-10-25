@@ -250,8 +250,9 @@ function createConnection(env: ConnectionEnv): HerdrConnection {
     onFocusEvent: () => controller.onFocusEvent(),
     onEvent: ({ event, data }) =>
       routeHerdrEvent(event, {
-        // Not logged: title-only pane updates are frequent; the poll logs an actual cwd change.
+        // Not logged: herdr pushes pane_updated on every terminal title change; the poll logs an actual cwd change.
         pollNow: () => env.poller.pollNow(),
+        record: () => env.returnService.onEvent({ event, data }),
         onFocusEvent: () => {
           const ids = ["pane_id", "tab_id", "workspace_id"].map((key) => `${key}=${String(data[key] ?? "absent")}`);
           log("info", `herdr event ${event} ${ids.join(" ")}`);
@@ -260,6 +261,7 @@ function createConnection(env: ConnectionEnv): HerdrConnection {
       }),
     onFirstDisconnect: () => void env.autoLaunch.onHerdrDisconnected().catch(env.warnAutoLaunch),
     onReconnected: () => void env.returnService.onReconnected(),
+    onConnected: () => void env.returnService.reconcile(),
   });
   return connection;
 }
@@ -558,12 +560,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   const probeDeps = nodeProbeDeps(log);
+  const liveProbe = createLiveCwdProbe({ processInfo: (paneId) => newClient().processInfo(paneId) }, probeDeps);
   const leaseFile = join(context.globalStorageUri.fsPath, LEASE_FILE);
   // Only the lease-holding navigator window records and returns; other windows share globalStorage.
   const returnService = createReturnService({
     platform,
     log,
-    clock: { ...timers, now: () => Date.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
+    clock: { now: () => Date.now(), sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
     pipeName: socketName,
     client: (pipeName) => newClient(pipeName),
     store: fileRecordStore(context.globalStorageUri.fsPath, log),
@@ -572,8 +575,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     holdsLease: () => windowKind() === "navigator-saved" && isLeaseLive(readLease(leaseFile), launch, Date.now()),
     pluginState: () => pluginHint.pluginState(),
     busyCheck: () => createPaneBusyCheck(nodePaneBusyDeps(log)),
+    probeShells: (panes) => liveProbe.probeShells(panes, { gitBashPath: settings.gitBashPath }),
   });
-  const liveProbe = createLiveCwdProbe({ processInfo: (paneId) => newClient().processInfo(paneId) }, probeDeps);
   const controller = createController({
     liveProbe,
     probePlatform: probeDeps.platform,
@@ -596,12 +599,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshWindowTitle(focusedLabel(snapshot));
     },
   });
-  // Herdr pushes no cwd-change event, so a poll of the focused pane's cwd detects a cd; focus events already cover pane switches.
+  // Herdr pushes pane_updated only on a terminal title change, so a cd in a shell whose prompt leaves the title alone (PowerShell, starship, a custom PS1) pushes nothing; the timer compares herdr's cwd only, and a pane_updated also probes the shell, which catches a stock Git Bash prompt's cd while herdr's cwd stays at the spawn folder.
   const poller = new CwdPoller({
     platform,
     fetchSnapshot: () => newClient().snapshot(),
     fetchPane: (paneId) => newClient().pane(paneId),
     getCwdSource: () => settings.cwdSource,
+    probeLive: async (paneId) => {
+      if (!settings.liveCwdProbe) return null;
+      const probed = await liveProbe.probe(paneId, { enabled: true, gitBashPath: settings.gitBashPath });
+      return probed.ok ? probed.path : null;
+    },
     isBusy: () => controller.getState().busy,
     isActive: () => connection.isConnected() && controller.getState().autoFollow && consent.autoAllowed(),
     onChange: () => controller.onFocusEvent(),
@@ -665,7 +673,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.onDidStartTerminalShellExecution(commandStart.onCommandStart),
     statusBar,
     { dispose: connection.stop },
-    { dispose: () => returnService.stop() },
     { dispose: () => poller.stop() },
     { dispose: () => controller.dispose() },
     { dispose: () => hostingMonitor.dispose() },
@@ -698,7 +705,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   refreshWindowTitle();
   autoLaunch.start();
   connection.start();
-  returnService.start();
   void requestHosting(true);
 }
 

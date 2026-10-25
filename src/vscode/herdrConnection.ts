@@ -3,7 +3,20 @@ import type { Logger, Subscription } from "../herdr";
 import type { HerdrEvent, SubscriptionHandlers } from "../herdr/types";
 import { errorText } from "../log";
 
-const FOCUS_SUBSCRIPTIONS = ["workspace.focused", "tab.focused", "pane.focused", "pane.updated", "workspace.created"];
+// Focus topics drive the follow; pane and close topics feed the return recorder.
+const SUBSCRIPTIONS = [
+  "workspace.focused",
+  "tab.focused",
+  "pane.focused",
+  "pane.updated",
+  "workspace.created",
+  "pane.created",
+  "pane.closed",
+  "pane.exited",
+  "pane.moved",
+  "tab.closed",
+  "workspace.closed",
+];
 const FAILURE_WARNING_MS = 30_000;
 
 export interface HerdrConnectionDeps {
@@ -26,6 +39,8 @@ export interface HerdrConnectionDeps {
   onFirstDisconnect: () => void;
   /** Runs when the subscription starts after a disconnected streak, never on the first connect. */
   onReconnected: () => void;
+  /** Runs when the subscription starts without a disconnected streak before it: the first connect or a restart by `start`. */
+  onConnected: () => void;
 }
 
 export interface HerdrConnection {
@@ -89,7 +104,7 @@ export function createHerdrConnection(deps: HerdrConnectionDeps): HerdrConnectio
       return;
     }
     log("info", `connecting to ${pipeName}`);
-    subscription = deps.subscribe(pipeName, FOCUS_SUBSCRIPTIONS, {
+    subscription = deps.subscribe(pipeName, SUBSCRIPTIONS, {
       onStarted: () => {
         clearFailureTimer();
         const reconnected = down;
@@ -97,6 +112,7 @@ export function createHerdrConnection(deps: HerdrConnectionDeps): HerdrConnectio
         connected = true;
         deps.refreshStatus();
         if (reconnected) deps.onReconnected();
+        else deps.onConnected();
         void deps.requestHosting(true);
         // Events may have been missed while disconnected.
         whenHosting(deps.onFocusEvent);

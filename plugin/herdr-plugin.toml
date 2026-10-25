@@ -15,6 +15,97 @@ on = "workspace.focused"
 platforms = ["windows"]
 command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/record.ps1"]
 
+# herdr pushes no cwd change to plugins, so the return record is merged from a full pane list on each of these events.
+[[events]]
+on = "pane.focused"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "pane.focused"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "workspace.focused"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "workspace.focused"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "tab.focused"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "tab.focused"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "pane.created"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "pane.created"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "pane.moved"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "pane.moved"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "pane.closed"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "pane.closed"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "pane.exited"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "pane.exited"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "tab.closed"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "tab.closed"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
+[[events]]
+on = "workspace.closed"
+platforms = ["linux", "macos"]
+command = ["sh", "scripts/cwd-record.sh"]
+
+[[events]]
+on = "workspace.closed"
+platforms = ["windows"]
+command = ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "scripts/cwd-record.ps1"]
+
 [[actions]]
 id = "open-in-vscode"
 title = "Open in VS Code"

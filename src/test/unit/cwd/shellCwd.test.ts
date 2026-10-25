@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import { findGitBash } from "../../../cwd/gitBash";
-import { createShellCwdProbe } from "../../../cwd/shellCwd";
+import { createMsysBatchProbe, createShellCwdProbe } from "../../../cwd/shellCwd";
 import type { ProbeDeps } from "../../../cwd/types";
 
 const BASH = "C:\\Program Files\\Git\\usr\\bin\\bash.exe";
@@ -70,7 +70,7 @@ describe("createShellCwdProbe", () => {
     assert.deepEqual(calls[0], { file: "lsof", args: ["-a", "-p", "9", "-d", "cwd", "-Fn"] });
   });
 
-  it("win32: reads the MSYS cwd of shell_pid through Git Bash, passing the pid as an argument and returning a Windows path", async () => {
+  it("win32: reads the MSYS cwd of shell_pid through Git Bash as a Windows path, and spawns nothing when Git Bash is missing", async () => {
     const calls: Call[] = [];
     const probe = createShellCwdProbe(
       makeDeps({
@@ -85,6 +85,12 @@ describe("createShellCwdProbe", () => {
     assert.equal(calls.length, 1);
     assert.equal(calls[0].file, BASH);
     assert.deepEqual(calls[0].args.slice(2), ["_", "500"]);
+
+    const unspawned: Call[] = [];
+    const noBash = createShellCwdProbe(makeDeps({ calls: unspawned, exists: () => false }));
+    assert.deepEqual(await noBash(500, ""), { ok: false, reason: "Git Bash not found" });
+    await assert.rejects(createMsysBatchProbe(makeDeps({ calls: unspawned, exists: () => false }))([], ""), /Git Bash not found/);
+    assert.equal(unspawned.length, 0);
   });
 
   it("win32: falls back to the Windows children of a native launcher, and reports 'not an MSYS process' when none is MSYS", async () => {
@@ -109,10 +115,50 @@ describe("createShellCwdProbe", () => {
     assert.deepEqual(await native(500, ""), { ok: false, reason: "not an MSYS process" });
   });
 
-  it("win32: reports 'Git Bash not found' without spawning anything", async () => {
-    const calls: Call[] = [];
-    const probe = createShellCwdProbe(makeDeps({ calls, exists: () => false }));
-    assert.deepEqual(await probe(500, ""), { ok: false, reason: "Git Bash not found" });
-    assert.equal(calls.length, 0);
+});
+
+describe("createMsysBatchProbe", () => {
+  it("keys one scan's folders by pane, refusing ambiguous launchers, and coalesces concurrent calls", async () => {
+    const scans: Call[] = [];
+    const lookups: Call[] = [];
+    // MSYS bash winpids 7001..7003 and 900; launcher 500 has one MSYS child, 600 two, 650 only a native child.
+    const scan = "7001\n7002\n7003\n900\nC:\\work\\a\nC:\\work\\b\nC:\\work\\c\nC:\\direct\n";
+    const pairs = "500 7001\r\n600 7002\r\n600 7003\r\n650 8000\r\n";
+    const batch = createMsysBatchProbe(
+      makeDeps({
+        execFile: (file, args) => {
+          (file === BASH ? scans : lookups).push({ file, args });
+          if (file === BASH) return Promise.resolve({ stdout: scan });
+          const asked = new Set(args.slice(4));
+          const stdout = pairs.split("\r\n").filter((line) => asked.has(line.split(" ")[0])).join("\r\n");
+          return new Promise((resolve) => setTimeout(() => resolve({ stdout }), 5));
+        },
+      }),
+    );
+    const panes = [
+      { paneId: "w:launcher", shellPid: 500 },
+      { paneId: "w:ambiguous", shellPid: 600 },
+      { paneId: "w:direct", shellPid: 900 },
+      { paneId: "w:native", shellPid: 650 },
+    ];
+    const expected = new Map([
+      ["w:launcher", { cwd: "C:\\work\\a", source: "msys" }],
+      ["w:ambiguous", undefined],
+      ["w:direct", { cwd: "C:\\direct", source: "msys" }],
+      ["w:native", undefined],
+    ]);
+
+    const [first, second] = await Promise.all([batch(panes, ""), batch(panes, "")]);
+    assert.deepEqual(first, expected);
+    assert.deepEqual(second, expected);
+    assert.equal(scans.length, 1);
+    assert.equal(lookups.length, 1);
+    // The direct MSYS shell_pid resolves by winpid, so CIM is asked only about launchers.
+    assert.deepEqual(lookups[0].args.slice(4), ["500", "600", "650"]);
+
+    assert.deepEqual(await batch(panes, ""), expected);
+    assert.equal(scans.length, 2);
+    // 500 is memoized; the unresolved launchers are asked again because their shell may still be starting.
+    assert.deepEqual(lookups[1].args.slice(4), ["600", "650"]);
   });
 });

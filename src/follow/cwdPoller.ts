@@ -1,6 +1,7 @@
 import type { Logger, PaneInfo, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
 import { normalizeCwd, samePath } from "../paths";
+import { paneHasAgent } from "../restore/returnPlanner";
 import { realClock } from "./controller";
 import type { Clock } from "./controller";
 import { findFocusedPane, pickCwd } from "./resolveTarget";
@@ -8,7 +9,7 @@ import type { CwdSource } from "./resolveTarget";
 
 export const MIN_POLL_MS = 250;
 
-/** Herdr events that make an immediate poll worthwhile; their payloads are not trusted to carry the cwd. */
+/** Herdr events that make an immediate poll worthwhile; the poll reads the cwd source the follow uses, not the payload. */
 export const POLL_EVENTS: ReadonlySet<string> = new Set(["pane_updated", "workspace_created"]);
 
 export interface CwdPollerOptions {
@@ -18,6 +19,8 @@ export interface CwdPollerOptions {
   fetchPane: (paneId: string) => Promise<PaneInfo>;
   /** The field the follow reads, so the poll compares what the follow would use. */
   getCwdSource: () => CwdSource;
+  /** The pane's live folder from the shell probe, or null; called only by a pollNow-triggered poll in auto mode, never by the timer. */
+  probeLive?: (paneId: string) => Promise<string | null>;
   /** True while a follow cycle runs; the tick is skipped. */
   isBusy: () => boolean;
   /** Polling continues only while this holds (connected, auto-follow on, hosting). */
@@ -33,9 +36,11 @@ export interface CwdPollerOptions {
 interface Baseline {
   paneId: string;
   cwd: string;
+  /** Last probe reading for this pane; undefined until an event poll probed it. */
+  live?: string;
 }
 
-/** Detects a `cd` in the focused pane by comparing herdr's reported cwd between snapshots. */
+/** Detects a `cd` in the focused pane by comparing herdr's reported cwd between snapshots, and on events also the probed live folder. */
 export class CwdPoller {
   private intervalMs = 0;
   private running = false;
@@ -45,6 +50,8 @@ export class CwdPoller {
   // Learnt from observe() and the snapshot fallback; lets a tick ask for one pane instead of the whole session.
   private focusedPaneId: string | null = null;
   private trailing = false;
+  // Set by pollNow, consumed by the next poll: only event-triggered polls run the shell probe.
+  private eventPending = false;
   private lastPollStart = Number.NEGATIVE_INFINITY;
   // Bumped by observe(): a poll that started before it holds a staler reading than the baseline it set.
   private generation = 0;
@@ -73,12 +80,14 @@ export class CwdPoller {
     this.baseline = null;
     this.focusedPaneId = null;
     this.trailing = false;
+    this.eventPending = false;
     this.cancelTimer();
   }
 
   /** Polls now, or once the last poll is MIN_POLL_MS old; a request during an in-flight poll queues one trailing poll. */
   pollNow(): void {
     if (!this.running) return;
+    this.eventPending = true;
     if (this.polling) {
       this.trailing = true;
       return;
@@ -92,12 +101,22 @@ export class CwdPoller {
     this.generation += 1;
     const pane = findFocusedPane(snapshot);
     this.focusedPaneId = pane?.pane_id ?? null;
-    this.baseline = (pane && this.reading(pane)) ?? this.baseline;
+    const current = pane && this.reading(pane);
+    if (!current) return;
+    const live = this.baseline?.paneId === current.paneId ? this.baseline.live : undefined;
+    this.baseline = { ...current, live };
   }
 
   private reading(pane: PaneInfo): Baseline | null {
     const cwd = normalizeCwd(pickCwd(pane, this.options.getCwdSource()), this.options.platform);
     return cwd === null ? null : { paneId: pane.pane_id, cwd };
+  }
+
+  // An agent pane's shell is running the agent, so it cannot have changed folder; its frequent title pushes must not each spawn a probe.
+  private async probeLive(pane: PaneInfo): Promise<string | null> {
+    const { probeLive, getCwdSource, platform } = this.options;
+    if (!probeLive || getCwdSource() !== "auto" || paneHasAgent(pane)) return null;
+    return normalizeCwd(await probeLive(pane.pane_id), platform);
   }
 
   private schedule(): void {
@@ -153,6 +172,8 @@ export class CwdPoller {
     const { platform, log } = this.options;
     this.polling = true;
     this.trailing = false;
+    const event = this.eventPending;
+    this.eventPending = false;
     this.lastPollStart = this.now();
     const generation = this.generation;
     try {
@@ -160,13 +181,24 @@ export class CwdPoller {
       if (!this.running || generation !== this.generation) return;
       this.focusedPaneId = pane?.pane_id ?? null;
       const current = pane && this.reading(pane);
-      if (!current) return;
+      if (!pane || !current) return;
+      const live = event ? await this.probeLive(pane) : null;
+      if (!this.running || generation !== this.generation) return;
       const previous = this.baseline;
-      this.baseline = current;
+      const samePane = previous?.paneId === current.paneId;
+      this.baseline = { ...current, live: live ?? (samePane ? previous.live : undefined) };
       // A different pane is a focus change: focus events already follow it.
-      if (!previous || previous.paneId !== current.paneId || samePath(previous.cwd, current.cwd, platform)) return;
+      if (!previous || !samePane) return;
       const { paneId, cwd } = current;
-      log?.("info", `trigger: pane ${paneId} cwd changed ${previous.cwd} -> ${cwd}`);
+      if (!samePath(previous.cwd, cwd, platform)) {
+        log?.("info", `trigger: pane ${paneId} cwd changed ${previous.cwd} -> ${cwd}`);
+        this.options.onChange();
+        return;
+      }
+      if (live === null) return;
+      // No earlier probe of this pane to compare with: the follow cycle re-probes and decides, so a cd back to herdr's stale cwd is not missed.
+      if (previous.live !== undefined && samePath(previous.live, live, platform)) return;
+      log?.("info", `trigger: pane ${paneId} live cwd ${previous.live ?? "unprobed"} -> ${live}`);
       this.options.onChange();
     } catch (err: unknown) {
       log?.("warn", `cwd poll failed: ${errorText(err)}`);

@@ -188,7 +188,10 @@ describe("FollowController", () => {
       const failed = liveController({ enabled: true, probe: async () => ({ ok: false, reason: "Git Bash not found" }) }, lines);
       await failed.controller.followNow();
       assert.deepEqual(failed.plans, [{ kind: "replace", index: 1, add: ["C:\\Users\\me"] }]);
-      assert.match(lines.join("\n"), /hint: .*herdrNavigator\.liveCwdProbe.*docs\/shell-integration\.md/);
+      const hint = lines.find((line) => line.includes("hint:")) ?? "";
+      // The hint points at the two settings that fix the probe; no doc it names may go missing.
+      assert.match(hint, /herdrNavigator\.liveCwdProbe and herdrNavigator\.gitBashPath settings$/);
+      assert.doesNotMatch(hint, /\.md\b/);
     });
   });
 

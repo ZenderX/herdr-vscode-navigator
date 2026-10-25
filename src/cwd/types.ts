@@ -24,6 +24,21 @@ export interface ProbeDeps {
   now?(): number;
 }
 
+/** A pane and the herdr `shell_pid` (a Windows pid) of its shell. */
+export interface ShellPane {
+  paneId: string;
+  shellPid: number;
+}
+
+/** A live folder read from the pane's MSYS shell `/proc/<pid>/cwd`, as a Windows path. */
+export interface MsysCwd {
+  cwd: string;
+  source: "msys";
+}
+
+/** pane id -> live folder, or undefined when the pane has no unambiguous MSYS bash shell (never a guess). */
+export type MsysCwdBatch = ReadonlyMap<string, MsysCwd | undefined>;
+
 export interface FailedAttempt {
   source: CwdOrigin;
   reason: string;
