@@ -3,8 +3,11 @@ import { samePath } from "../paths";
 import { isSpawnForm } from "./record";
 import type { PaneEntry } from "./record";
 
-/** Skip reasons in the plugin's evaluation order; `error` is a failed send, reported by the caller. */
-export const SKIP_REASONS = ["no-pane", "same", "unknown-spawn", "mismatch", "missing-folder", "agent", "not-ready", "busy", "error"] as const;
+/**
+ * Skip reasons in the plugin's evaluation order; the caller reports `busy-timeout` (still busy when the readiness window
+ * ends) and `error` (a failed send).
+ */
+export const SKIP_REASONS = ["no-pane", "same", "unknown-spawn", "mismatch", "missing-folder", "agent", "not-ready", "busy", "busy-timeout", "error"] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
 export interface PlannerPane {

@@ -146,6 +146,23 @@ export function setShellPids(record: CwdRecord, pids: ReadonlyMap<string, number
   return result(record, panes);
 }
 
+/**
+ * Puts the folder and shell pid of each `kept` entry back into `next`, unless its id is gone or now holds a pane with
+ * another spawn folder; `changed` is measured against `before`.
+ */
+export function keepEntries(before: CwdRecord, next: CwdRecord, kept: ReadonlyMap<string, PaneEntry>, platform: NodeJS.Platform): MergeResult {
+  const panes = { ...next.panes };
+  for (const [paneId, { folder, spawn, shellPid }] of kept) {
+    const entry = panes[paneId];
+    if (folder === undefined || entry?.spawn === undefined || spawn === undefined || !samePath(entry.spawn, spawn, platform)) continue;
+    const restored: PaneEntry = { ...entry, folder };
+    if (shellPid === undefined) delete restored.shellPid;
+    else restored.shellPid = shellPid;
+    panes[paneId] = restored;
+  }
+  return result(before, panes);
+}
+
 /** Recorded live folders by pane id; panes known only by their spawn folder have nothing to return to. */
 export function recordedFolders(record: CwdRecord): Record<string, string> {
   return Object.fromEntries(Object.entries(record.panes).flatMap(([paneId, { folder }]) => (folder === undefined ? [] : [[paneId, folder]])));

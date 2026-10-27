@@ -36,6 +36,9 @@ function setup(initial: CwdRecord["panes"] = {}) {
     // The MSYS probe's folder per pane; absent means the inner shell is not resolvable.
     msys: {} as Record<string, string>,
     probes: [] as string[][],
+    // Busy checks left per pane before its shell turns idle; each look builds a fresh check.
+    busy: {} as Record<string, number>,
+    looks: 0,
     now: 0,
     onSleep: async (): Promise<void> => undefined,
   };
@@ -75,7 +78,14 @@ function setup(initial: CwdRecord["panes"] = {}) {
     connected: () => true,
     holdsLease: () => state.lease,
     pluginState: () => state.plugin,
-    busyCheck: () => async () => false,
+    busyCheck: () => {
+      state.looks++;
+      return async ({ pane_id }) => {
+        const left = state.busy[pane_id] ?? 0;
+        state.busy[pane_id] = left - 1;
+        return left > 0;
+      };
+    },
     probeShells: async (panes) => {
       state.probes.push(panes.map(({ paneId }) => paneId));
       return new Map(panes.map(({ paneId }) => [paneId, paneId in state.msys ? { cwd: state.msys[paneId], source: "msys" as const } : undefined]));
@@ -152,7 +162,7 @@ describe("returnService", () => {
     assert.deepEqual(reopened.state.probes, [["w1:p1"]]);
   });
 
-  it("after a reconnect pauses recording, waits until each shell is ready (a first prompt, or a Git Bash inner shell the probe resolves), checks each pane's spawn folder from its spawn form or else the busy check's process info, types one cd per qualifying pane, logs one line, then reconciles keeping the returned folders and resetting a reused id; defers entirely to the plugin", async () => {
+  it("after a reconnect pauses recording, waits until each shell is ready (a first prompt, or a Git Bash inner shell the probe resolves), checks each pane's spawn folder from its spawn form or else the busy check's process info, types one cd per qualifying pane, logs one line, then reconciles keeping the returned folders and resetting a reused id; looks again at a busy shell with a fresh process table until it is idle or the window ends, and leaves a pane still busy or not ready at the end at its recorded folder and shell pid so the restart is still seen; defers entirely to the plugin", async () => {
     const me = "C:\\Users\\me";
     const t = setup({
       "w1:p1": { folder: "C:\\a'b", spawn: me },
@@ -221,6 +231,37 @@ describe("returnService", () => {
     // Decided: the restored panes now key the next restart.
     assert.deepEqual(t.state.infoCalls.slice(13), ["w1:p2", "w1:p7"]);
     assert.deepEqual(t.stored().panes["w1:p7"], { folder: me, spawn: me, shellPid: pid });
+
+    // A fresh Git Bash login shell runs its profile's children before the first prompt: a cd typed then would be lost.
+    const homes = snapshotOf(pane("w1:p1", "C:\\Users\\me\\"), pane("w1:p2", "C:\\Users\\me\\"));
+    const retried = setup({ "w1:p1": { folder: "C:\\work", spawn: me, shellPid: 99 }, "w1:p2": { folder: "C:\\proj", spawn: me, shellPid: 99 } });
+    retried.state.msys = { "w1:p1": me, "w1:p2": me };
+    retried.state.busy = { "w1:p1": 2, "w1:p2": Infinity };
+    retried.state.snapshots = [homes];
+    await retried.service.onReconnected();
+    assert.deepEqual(retried.state.sent, [{ paneId: "w1:p1", text: "cd 'C:\\work'" }]);
+    assert.deepEqual(retried.state.logs, ["cwd-return: 1 panes returned, 1 skipped (busy-timeout=1)"]);
+    assert.equal(retried.state.looks, 21, "one fresh process table per 1 s look until the 20 s window ends");
+    // The unreturned pane keeps its pre-restart folder and pid, even through a later reading of its restored shell.
+    retried.service.onEvent(paneEvent("pane_updated", "w1:p2", "C:\\Users\\me\\"));
+    await settle();
+    assert.deepEqual(retried.stored().panes, { "w1:p1": { folder: "C:\\work", spawn: me, shellPid: pid }, "w1:p2": { folder: "C:\\proj", spawn: me, shellPid: 99 } });
+    const next = setup(retried.stored().panes);
+    next.state.plugin = "present";
+    next.state.snapshots = [homes];
+    await next.service.reconcile();
+    assert.deepEqual(next.state.logs, ["cwd-return: deferred to herdr plugin"], "the next activation still sees the restart");
+
+    // A shell whose prompt never came: its first live folder after the window is not recorded over the one to return to.
+    const late = setup({ "w1:p1": { folder: "C:\\late", spawn: me, shellPid: 99 } });
+    late.state.snapshots = [snapshotOf(pane("w1:p1", "C:\\Users\\me\\"))];
+    late.state.onSleep = async () => {
+      if (late.state.now >= 20_000) late.state.snapshots = [snapshotOf(pane("w1:p1", "C:\\Users\\me\\")), snapshotOf(pane("w1:p1", me))];
+    };
+    await late.service.onReconnected();
+    assert.deepEqual(late.state.logs, ["cwd-return: 0 panes returned, 1 skipped (not-ready=1)"]);
+    assert.equal(late.state.fetches, 22, "21 looks, then the reconcile snapshot with the live folder");
+    assert.deepEqual(late.stored().panes, { "w1:p1": { folder: "C:\\late", spawn: me, shellPid: 99 } });
 
     const deferred = setup({ "w1:p1": { folder: "C:\\proj" } });
     deferred.state.plugin = "present";

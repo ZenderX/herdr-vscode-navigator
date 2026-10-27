@@ -124,7 +124,7 @@ spawn_skip() {
   [ -n "$seen" ] && ! same_path "$2" "$seen"
 }
 
-# Sets info for pane $1, one process-info call per pane, shared by the spawn check and the busy check; returns 1 when the call fails.
+# Sets info for pane $1, one process-info call per pane and wait step, shared by the spawn check and the busy check; returns 1 when the call fails.
 info_id=
 info_ok=1
 load_info() {
@@ -216,18 +216,20 @@ run_failed=0
 if [ -z "$record" ]; then
   summary='cwd-return: 0 panes returned, 0 skipped (no record)'
 else
-  # Wait for the first prompt of every pane that may need a return, so the cd is not typed ahead of the shell.
+  # Wait until every pane that may need a return has drawn its first prompt and runs no program, so the cd is not typed ahead of the shell.
   waited=0
   while :; do
     waiting=0
+    info_id=
     while IFS= read -r line <&3; do
       split_line "$line"
       [ -n "$id" ] && [ -n "$folder" ] || continue
       find_pane "$id" || continue
-      spawn_form "$cwd" || continue
       ! spawn_skip "$id" "$spawn" || continue
       [ "$(trim_folder "$cwd")" != "$folder" ] || continue
       [ -d "$folder" ] || continue
+      # A fresh login shell runs its startup programs for its first seconds, so busy is waited out like not-ready.
+      spawn_form "$cwd" || { [ "$agent" != 1 ] && pane_busy "$id"; } || continue
       waiting=1
       break
     done 3<<EOF

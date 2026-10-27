@@ -52,7 +52,7 @@ function Test-SpawnSkip($paneId) {
   -not $spawnOf[$paneId] -or ($spawnSeen.Contains($paneId) -and -not (Test-SamePath $spawnOf[$paneId] $spawnSeen[$paneId]))
 }
 
-# One process-info call per pane, shared by the spawn check and the busy check; $null when the call fails.
+# One process-info call per pane and wait step, shared by the spawn check and the busy check; $null when the call fails.
 $infoOf = @{}
 function Get-Info($paneId) {
   if (-not $script:infoOf.Contains($paneId)) {
@@ -168,18 +168,20 @@ $runFailed = $false
 if ($record.Count -eq 0) {
   $summary = 'cwd-return: 0 panes returned, 0 skipped (no record)'
 } else {
-  # Wait until every pane that may need a return is ready, so the cd is not typed ahead of the shell.
+  # Wait until every pane that may need a return is ready and runs no program, so the cd is not typed ahead of the shell.
   $deadline = [DateTime]::UtcNow.AddSeconds($readyTimeout)
   while ($true) {
+    # A fresh login shell runs its startup programs for its first seconds, so busy is waited out like not-ready.
     $waiting = @($panes | Where-Object {
       $record.Contains($_.pane_id) -and -not (Test-SpawnSkip $_.pane_id) -and
       (Format-Folder ([string]$_.cwd)) -ne $record[$_.pane_id] -and (Test-Path -LiteralPath $record[$_.pane_id] -PathType Container) -and
-      -not (Test-Ready $_)
+      (-not (Test-Ready $_) -or (-not ($_.PSObject.Properties.Name -contains 'agent' -or $_.PSObject.Properties.Name -contains 'agent_session') -and (Test-Busy $_.pane_id)))
     })
     if (-not $waiting -or [DateTime]::UtcNow -ge $deadline) { break }
     Start-Sleep -Seconds 1
     $panes = Get-Panes
     $psRows = $null
+    $infoOf = @{}
   }
 
   $psRows = $null

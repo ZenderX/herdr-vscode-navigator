@@ -4,11 +4,11 @@ import type { MsysCwdBatch, ShellPane } from "../cwd/types";
 import type { HerdrEvent, Logger, PaneInfo, PaneProcessInfo, SessionSnapshot } from "../herdr/types";
 import type { PluginState } from "../launch/pluginDetect";
 import { errorText } from "../log";
-import { FOCUS_EVENTS, dropPanes, emptyRecord, isSpawnForm, mergePane, mergeRecord, parseRecord, recordKey, recordedFolders, setShellPids, setSpawns } from "./record";
-import type { CwdRecord, MergeResult, PaneReading } from "./record";
+import { FOCUS_EVENTS, dropPanes, emptyRecord, isSpawnForm, keepEntries, mergePane, mergeRecord, parseRecord, recordKey, recordedFolders, setShellPids, setSpawns } from "./record";
+import type { CwdRecord, MergeResult, PaneEntry, PaneReading } from "./record";
 import { isRestart } from "./restartDetect";
 import { anyNotReady, paneHasAgent, planReturn, summary } from "./returnPlanner";
-import type { PlannerPane, ReturnAction, ReturnPlan, ReturnSkip } from "./returnPlanner";
+import type { PlannerPane, ReturnAction, ReturnPlan, ReturnSkip, SkipReason } from "./returnPlanner";
 
 // The plugin's HERDR_NAV_READY_TIMEOUT and its 1 s re-read.
 const READY_TIMEOUT_MS = 20_000;
@@ -43,7 +43,7 @@ export interface ReturnServiceDeps {
   connected: () => boolean;
   holdsLease: () => boolean;
   pluginState: () => PluginState;
-  /** One busy check per return run, so the process table is read once per run. */
+  /** One busy check per look at the restored panes, so the process table is read once per look. */
   busyCheck: () => (info: PaneProcessInfo) => Promise<boolean>;
   /** Live folders of Windows Git Bash shells from one MSYS scan; rejects when the scan fails. */
   probeShells: (panes: readonly ShellPane[]) => Promise<MsysCwdBatch>;
@@ -66,6 +66,21 @@ interface ReturnRun {
   /** Process-info spawn folders of panes the run looked at, for panes without a spawn-form reading. */
   shellSpawns: ReadonlyMap<string, string>;
   sent: ReadonlySet<string>;
+  /** Recorded entries of panes still busy or not ready when the window ended: kept until the next return run. */
+  pending: Map<string, PaneEntry>;
+}
+
+interface ReturnOutcome {
+  sent: ReturnAction[];
+  skips: ReturnSkip[];
+  shellSpawns: ReadonlyMap<string, string>;
+}
+
+// Left in the record so the next restart check still sees the restart and returns them.
+const PENDING_REASONS: ReadonlySet<SkipReason> = new Set(["busy-timeout", "not-ready"]);
+
+function timedOut(skip: ReturnSkip): ReturnSkip {
+  return skip.reason === "busy" ? { paneId: skip.paneId, reason: "busy-timeout" } : skip;
 }
 
 // herdr restores a pane into its shell's persisted process cwd, so the idle shell's own cwd is its spawn folder.
@@ -109,7 +124,8 @@ function paneReading(data: Record<string, unknown>): PaneReading | undefined {
 /**
  * Records pane folders from herdr's pane events while this window is connected and holds the navigator lease, with
  * a full snapshot at connect, on focus changes, on tab and space closes and after a return; after a restart it types
- * `cd` into qualifying restored shells. herdr keeps a Windows Git Bash pane's cwd in spawn form, so on those events
+ * `cd` into qualifying restored shells once they are idle; one still busy or not ready when the readiness window ends
+ * keeps its recorded folder and shell pid, so the next restart check returns it. herdr keeps a Windows Git Bash pane's cwd in spawn form, so on those events
  * its folder is read from the MSYS shell instead; a `cd` followed by no event is not seen. A restart while the window
  * was closed is seen when a recorded pane id has another shell pid at the first snapshot.
  */
@@ -127,6 +143,8 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
   const seedTried = new Set<string>();
   // Current shell pid per pane id; cleared by a restart, dropped when an id gets a new pane.
   const shellPids = new Map<string, number>();
+  // Panes the last return run left unreturned: no reading may replace their folder or shell pid until the next run.
+  let pending = new Map<string, PaneEntry>();
 
   const load =(pipeName: string): CwdRecord => {
     const key = recordKey(pipeName);
@@ -136,7 +154,9 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
 
   const recordingAllowed = (): boolean => !returning && deps.connected() && deps.holdsLease();
 
-  const save = ({ record, changed }: MergeResult): void => {
+  const save = (merged: MergeResult): void => {
+    if (!merged.changed) return;
+    const { record, changed } = keepEntries(cached ?? emptyRecord(merged.record.key), merged.record, pending, platform);
     if (!changed) return;
     cached = record;
     try {
@@ -224,25 +244,11 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
     lookup().catch((err: unknown) => log("warn", `cwd-return: spawn folder lookup failed: ${errorText(err)}`));
   };
 
-  const waitForPrompts = async (client: ReturnClient, recorded: CwdRecord["panes"], folderExists: (folder: string) => boolean | undefined, spawns: Map<string, string>) => {
-    const deadline = clock.now() + READY_TIMEOUT_MS;
-    for (;;) {
-      const snapshot = await client.snapshot();
-      noteSpawns(spawns, snapshot.panes);
-      const waiting = snapshotReadings(snapshot.panes).filter(({ paneId }) => recorded[paneId]?.folder !== undefined);
-      const live = await probeLive(await pidsFor(client, candidateIds(waiting)), waiting);
-      const panes = snapshot.panes.map((pane) => plannerPane(pane, spawns, live));
-      const plan = planReturn({ recorded, panes, folderExists, platform });
-      if (!anyNotReady(plan) || clock.now() >= deadline) return { panes, plan };
-      await clock.sleep(READY_POLL_MS);
-    }
-  };
-
-  const busyVerdicts = async (client: ReturnClient, plan: ReturnPlan, recorded: CwdRecord["panes"]) => {
+  const busyVerdicts = async (client: ReturnClient, plan: ReturnPlan, recorded: CwdRecord["panes"], shellSpawns: Map<string, string>) => {
+    // A fresh check per look: a login shell's startup children that exited since the last look must leave the table.
     const isBusy = deps.busyCheck();
     const busy = new Map<string, boolean>();
     const failed = new Set<string>();
-    const shellSpawns = new Map<string, string>();
     // A pane already live at the first look showed no spawn form; the process info read for its busy check has the spawn folder.
     const unchecked = plan.skips.filter(({ paneId, reason }) => reason === "unknown-spawn" && recorded[paneId]?.spawn !== undefined);
     for (const { paneId } of [...plan.actions, ...unchecked]) {
@@ -256,7 +262,50 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
         log("debug", `cwd-return: process info for ${paneId} failed: ${errorText(err)}`);
       }
     }
-    return { busy, failed, shellSpawns };
+    return { busy, failed };
+  };
+
+  // Waits until every pane is ready, then types each idle pane's cd; a busy shell is looked at again until the window ends.
+  const returnWhenIdle = async (client: ReturnClient, recorded: CwdRecord["panes"], folderExists: (folder: string) => boolean | undefined, spawns: Map<string, string>): Promise<ReturnOutcome> => {
+    const deadline = clock.now() + READY_TIMEOUT_MS;
+    const shellSpawns = new Map<string, string>();
+    const sent: ReturnAction[] = [];
+    const errors: ReturnSkip[] = [];
+    const done = new Set<string>();
+    for (;;) {
+      const open = Object.fromEntries(Object.entries(recorded).filter(([paneId]) => !done.has(paneId)));
+      const snapshot = await client.snapshot();
+      noteSpawns(spawns, snapshot.panes);
+      const waiting = snapshotReadings(snapshot.panes).filter(({ paneId }) => open[paneId]?.folder !== undefined);
+      const live = await probeLive(await pidsFor(client, candidateIds(waiting)), waiting);
+      const panes = snapshot.panes.map((pane) => plannerPane(pane, spawns, live));
+      const ready = planReturn({ recorded: open, panes, folderExists, platform });
+      if (anyNotReady(ready) && clock.now() < deadline) {
+        await clock.sleep(READY_POLL_MS);
+        continue;
+      }
+      const { busy, failed } = await busyVerdicts(client, ready, open, shellSpawns);
+      const checked = panes.map((pane) => ({ ...pane, spawn: pane.spawn ?? shellSpawns.get(pane.paneId), busy: busy.get(pane.paneId) }));
+      const plan = planReturn({ recorded: open, panes: checked, folderExists, platform });
+      for (const action of plan.actions) {
+        done.add(action.paneId);
+        if (failed.has(action.paneId)) {
+          errors.push({ paneId: action.paneId, reason: "error" });
+          continue;
+        }
+        try {
+          await client.sendInput(action.paneId, action.text);
+          sent.push(action);
+        } catch (err: unknown) {
+          errors.push({ paneId: action.paneId, reason: "error" });
+          log("debug", `cwd-return: send to ${action.paneId} failed: ${errorText(err)}`);
+        }
+      }
+      if (!plan.skips.some(({ reason }) => reason === "busy") || clock.now() >= deadline) {
+        return { sent, skips: [...plan.skips.map(timedOut), ...errors], shellSpawns };
+      }
+      await clock.sleep(READY_POLL_MS);
+    }
   };
 
   /** Undefined when this window does not return panes; recording then waits for the next event. */
@@ -267,7 +316,7 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
     const recorded = record.panes;
     const folders = [...new Set(Object.values(recordedFolders(record)))];
     const spawns = new Map<string, string>();
-    if (folders.length === 0) return { spawns, shellSpawns: new Map(), sent: new Set() };
+    if (folders.length === 0) return { spawns, shellSpawns: new Map(), sent: new Set(), pending: new Map() };
     if (deps.pluginState() === "present") {
       log("info", "cwd-return: deferred to herdr plugin");
       return undefined;
@@ -277,28 +326,10 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
     const exists = new Map(await Promise.all(folders.map(async (folder) => [folder, await deps.isDirectory(folder)] as const)));
     const folderExists = (folder: string): boolean | undefined => exists.get(folder);
     const client = deps.client(pipeName);
-    const ready = await waitForPrompts(client, recorded, folderExists, spawns);
-    const { busy, failed, shellSpawns } = await busyVerdicts(client, ready.plan, recorded);
-    const panes = ready.panes.map((pane) => ({ ...pane, spawn: pane.spawn ?? shellSpawns.get(pane.paneId), busy: busy.get(pane.paneId) }));
-    const plan = planReturn({ recorded, panes, folderExists, platform });
-
-    const sent: ReturnAction[] = [];
-    const skips: ReturnSkip[] = [...plan.skips];
-    for (const action of plan.actions) {
-      if (failed.has(action.paneId)) {
-        skips.push({ paneId: action.paneId, reason: "error" });
-        continue;
-      }
-      try {
-        await client.sendInput(action.paneId, action.text);
-        sent.push(action);
-      } catch (err: unknown) {
-        skips.push({ paneId: action.paneId, reason: "error" });
-        log("debug", `cwd-return: send to ${action.paneId} failed: ${errorText(err)}`);
-      }
-    }
+    const { sent, skips, shellSpawns } = await returnWhenIdle(client, recorded, folderExists, spawns);
     log("info", summary(sent, skips));
-    return { spawns, shellSpawns, sent: new Set(sent.map(({ paneId }) => paneId)) };
+    const unreturned = skips.filter(({ reason }) => PENDING_REASONS.has(reason)).map(({ paneId }) => [paneId, recorded[paneId]] as const);
+    return { spawns, shellSpawns, sent: new Set(sent.map(({ paneId }) => paneId)), pending: new Map(unreturned) };
   };
 
   // The run's spawn folders key the restored panes, and a mismatched entry is reset here.
@@ -341,7 +372,9 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
     } finally {
       returning = false;
     }
-    if (run) await reconcileAfterReturn(run);
+    if (!run) return;
+    pending = run.pending;
+    await reconcileAfterReturn(run);
   };
 
   // The first snapshot of this activation is checked for freshly restored shells before it may touch the record.
@@ -404,11 +437,15 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
       const paneId = textField(data, "pane_id");
       if (paneId === undefined) return void log("warn", `cwd-return: ${event} without a pane id`);
       shellPids.delete(paneId);
+      pending.delete(paneId);
       return void save(dropPanes(record, [paneId]));
     }
     const reading = paneReading(data);
     if (reading === undefined) return void log("warn", `cwd-return: ${event} without a pane`);
-    if (event === "pane_created") shellPids.delete(reading.paneId);
+    if (event === "pane_created") {
+      shellPids.delete(reading.paneId);
+      pending.delete(reading.paneId);
+    }
     if (event !== "pane_moved") {
       save(mergePane(record, reading, platform));
       return reading;
@@ -416,7 +453,11 @@ export function createReturnService(deps: ReturnServiceDeps): ReturnService {
     // A move to another space gives the pane a new id; the old one is retired.
     const previous = textField(data, "previous_pane_id");
     shellPids.delete(reading.paneId);
-    if (previous !== undefined) shellPids.delete(previous);
+    pending.delete(reading.paneId);
+    if (previous !== undefined) {
+      shellPids.delete(previous);
+      pending.delete(previous);
+    }
     const dropped = previous === undefined ? { record, changed: false } : dropPanes(record, [previous]);
     const merged = mergePane(dropped.record, reading, platform);
     save({ record: merged.record, changed: dropped.changed || merged.changed });

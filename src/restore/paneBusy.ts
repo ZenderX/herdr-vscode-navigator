@@ -30,7 +30,7 @@ export interface PaneBusyDeps {
 }
 
 /**
- * Returns a busy check for panes of one return run; the MSYS table is read once per check function.
+ * Returns a busy check for one look at the restored panes; the MSYS table is read once per check function.
  * Fails toward idle: no ps.exe, a failing child lookup, or a check over the timeout all report `false`.
  */
 export function createPaneBusyCheck(deps: PaneBusyDeps): (info: PaneProcessInfo) => Promise<boolean> {

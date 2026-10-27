@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import type { PaneInfo } from "../../../herdr/types";
-import { dropPanes, emptyRecord, mergePane, mergeRecord, parseRecord, recordKey } from "../../../restore/record";
+import { dropPanes, emptyRecord, keepEntries, mergePane, mergeRecord, parseRecord, recordKey } from "../../../restore/record";
 import type { CwdRecord } from "../../../restore/record";
 import { isRestart } from "../../../restore/restartDetect";
 import { anyNotReady, paneHasAgent, planReturn, summary, type PlannerPane } from "../../../restore/returnPlanner";
@@ -8,7 +8,7 @@ import { anyNotReady, paneHasAgent, planReturn, summary, type PlannerPane } from
 const pane = (paneId: string): PaneInfo => ({ pane_id: paneId, terminal_id: "t", workspace_id: "w1", tab_id: "t1", focused: false });
 
 describe("cwd return rules", () => {
-  it("keeps a live folder over a spawn-form reading of the same spawn folder, resets an entry whose spawn folder changed, drops vanished panes, and still reads version-1 records", () => {
+  it("keeps a live folder over a spawn-form reading of the same spawn folder, resets an entry whose spawn folder changed, drops vanished panes, keeps a pending pane's folder and pid, and still reads version-1 records", () => {
     const key = recordKey("\\\\.\\pipe\\herdr-default");
     assert.equal(key, "__._pipe_herdr-default");
     const record: CwdRecord = { ...emptyRecord(key), panes: { "w1:p1": { folder: "C:\\live", spawn: "C:\\Users\\me" }, "w1:p2": { folder: "C:\\gone" } } };
@@ -31,6 +31,11 @@ describe("cwd return rules", () => {
     assert.deepEqual(live.record.panes["w1:p1"], { spawn: "C:\\other", folder: "C:\\work" });
     assert.equal(mergePane(live.record, { paneId: "w1:p3", rawCwd: null }, "win32").changed, false);
     assert.deepEqual(Object.keys(dropPanes(live.record, ["w1:p1"]).record.panes), ["w1:p3", "w1:p4"]);
+
+    // A pane awaiting its return keeps its folder and pid over newer readings, unless its id now holds a pane spawned elsewhere.
+    const pending = new Map([["w1:p1", { folder: "C:\\live", spawn: "C:\\other", shellPid: 7 }]]);
+    assert.deepEqual(keepEntries(live.record, live.record, pending, "win32").record.panes["w1:p1"], { spawn: "C:\\other", folder: "C:\\live", shellPid: 7 });
+    assert.equal(keepEntries(first.record, first.record, pending, "win32").changed, false);
 
     assert.deepEqual(parseRecord(live.record), live.record);
     assert.deepEqual(parseRecord({ version: 1, key, panes: { "w1:p1": "C:\\a" } }), { version: 2, key, panes: { "w1:p1": { folder: "C:\\a" } } });

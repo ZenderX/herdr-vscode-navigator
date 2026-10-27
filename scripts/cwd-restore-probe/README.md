@@ -53,6 +53,21 @@ Measures, on Windows, what herdr pushes as `pane_updated` after a cwd change wit
 
 Result 2026-10-24: every row passed; the stock-prompt title push came 360 ms after `pane run` started, and the title push of row 3 arrived 211 ms after the `cd`, before the stop.
 
+## busy-settle.mjs
+
+```
+npm run compile
+node scripts/cwd-restore-probe/busy-settle.mjs
+```
+
+Measures, on Windows, how long restored Git Bash login shells stay busy after a server restart, and runs the extension's own return path (`createReturnService`, `createPaneBusyCheck` and the MSYS probe from `out/`) against them, in the scratch session `navigator-busy-probe`. The scratch `config.toml` (`HERDR_CONFIG_PATH`) sets `default_shell` Git for Windows' `bin\bash.exe` and `shell_mode = "login"`; `HOME` stays yours, so the panes run your `~/.bash_profile` and `~/.bashrc` unchanged (they are only read). `HERDR_*`, `ORIGINAL_PATH`, `PS1`, `PROMPT_COMMAND`, `BASH_ENV` and `ENV` are stripped from the server's environment. Your shells' history setup applies, so the `cd` lines typed into the scratch panes (4 by the script, 4 by the return) land in your `~/.bash_history`.
+
+It creates 5 spaces of 2 panes in a scratch `spawn here` folder, `cd`s the first pane of 4 of them into `live <n>`, lets the extension's recorder write the record (scratch store), waits for the autosave, runs `herdr session stop` and a headless restart, then calls the service's `onReconnected()` as soon as the session runs, as a connection back after `ENOENT` does. Each look's `ps -W` table is kept, so a busy verdict names the shell's MSYS children. Per pane it prints the spawn time (the restored `shell_pid`'s creation time, from the restart), the time its MSYS shell was first read (`readyMs`), its first and first idle busy verdicts (from its spawn; a first verdict that is already idle bounds the settle time from above), the busy children, the final folder (MSYS probe) and the record after the run. It fails unless every pane is at its live folder, the summary line reads `cwd-return: 4 panes returned` and the record keeps the moved panes' live folders with the new pids. `longestSettleMs` is the largest first-idle time of the moved panes; `insideWindowWithMargin` is true when it is at most 15 s (the 20 s ready window minus 5 s).
+
+Cleanup, also on failure: `herdr session stop` and `herdr session delete navigator-busy-probe`, its session dir, and the scratch folder. If interrupted, run those two `herdr session` commands by hand.
+
+Result 2026-10-25 (two runs): every pane returned (`cwd-return: 4 panes returned, 6 skipped (same=6)`). The MSYS shells were readable 2.3–3.4 s after spawn; one moved pane was busy at its first look both times (child `~/.cargo/bin/rustc`, 7.7 and 7.9 s after spawn) and idle at the next (9.6 and 10.0 s). The longest settle was 10.0 s, inside the window with 5 s to spare.
+
 ## linux/
 
 ```
