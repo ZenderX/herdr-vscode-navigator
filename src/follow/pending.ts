@@ -64,7 +64,9 @@ export interface ResumeDeps {
   };
   now: number;
   platform: NodeJS.Platform;
-  setTrackedPath: (path: string) => void;
+  /** The display name a slot for folder gets; undefined keeps its basename. */
+  displayName: (folder: string) => Promise<string | undefined>;
+  setTrackedPath: (path: string, name: string | undefined) => void;
   saveTracked: (path: string) => Promise<void>;
   /** Records that the user already confirmed following in this window. */
   adoptConfirmation: () => Promise<void>;
@@ -75,18 +77,25 @@ export interface ResumeDeps {
 /** Resumes after the one-time extension-host restart: prefers the pending target, else the saved tracked slot. */
 export async function resumePending(deps: ResumeDeps): Promise<void> {
   const { pending, saved, takeover, now, platform, log } = deps;
+  const takeoverName = takeover.record.folder === undefined ? undefined : await deps.displayName(takeover.record.folder);
   await activateNavigator(
     {
-      takeover: takeover.record,
+      takeover: takeoverName === undefined ? takeover.record : { ...takeover.record, name: takeoverName },
       savedNavigator: takeover.savedNavigator,
       pendingTarget: isPendingTarget(pending) ? pending.target : undefined,
       savedSlot: saved,
       now,
       maxAgeMs: takeover.maxAgeMs,
       resume: async (slot) => {
-        deps.setTrackedPath(slot);
+        const name = await deps.displayName(slot);
+        deps.setTrackedPath(slot, name);
         // The converted window has a new workspaceState scope, so the slot must be saved again here.
         await deps.saveTracked(slot);
+        // A convert writes the workspace file without names, and no follow cycle runs while auto-follow is off.
+        const open = deps.folders();
+        const index = open.findIndex(({ path }, i) => i >= 1 && samePath(path, slot, platform));
+        if (name === undefined || index === -1 || open[index].name === name) return;
+        await takeover.updateFolders("rename", index, 1, [{ path: open[index].path, name }]);
       },
     },
     { openFolders: () => deps.folders().map(({ path }) => path), updateFolders: takeover.updateFolders },

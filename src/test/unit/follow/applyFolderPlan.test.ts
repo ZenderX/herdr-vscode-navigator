@@ -16,7 +16,9 @@ function setup(folders: string[], hosts: boolean): { calls: string[]; effects: P
       openFolders: () => folders,
       convert: (anchor, target) => Promise.resolve(void calls.push(`convert ${anchor} ${target}`)).then(() => true),
       updateFolders: (kind, start, deleteCount, add) =>
-        Promise.resolve(void calls.push(`update ${kind} ${start} ${deleteCount} ${add.join(",")}`)).then(() => true),
+        Promise.resolve(
+          void calls.push(`update ${kind} ${start} ${deleteCount} ${add.map(({ path, name }) => (name === undefined ? path : `${path} as ${name}`)).join(",")}`),
+        ).then(() => true),
     },
     handoff: {
       hostsHerdr: () => hosts,
@@ -48,6 +50,9 @@ describe("applyPendingTakeover", () => {
     const appended = run([ANCHOR], fresh);
     await appended.done;
     assert.deepEqual(appended.calls, [`update append 1 0 ${TARGET}`]);
+    const named = run([ANCHOR, PROJECT], { ...fresh, name: "mainproj" });
+    assert.equal(await named.done, TARGET);
+    assert.deepEqual(named.calls, [`update replace 1 1 ${TARGET} as mainproj`]);
     const held = run([ANCHOR, TARGET], fresh);
     assert.equal(await held.done, TARGET);
     assert.deepEqual(held.calls, []);
@@ -72,5 +77,12 @@ describe("applyFolderPlan", () => {
     const s = apply(folders, true, plan);
     assert.equal(await s.done, true);
     assert.deepEqual(s.calls, [`update replace 1 1 ${TARGET}`]);
+
+    // The rename re-adds the open slot's own path, which the mutation must not drop as already present.
+    const slot = [ANCHOR, TARGET];
+    const rename = planFolders({ folders: [{ path: ANCHOR }, { path: TARGET, name: "target" }], trackedPath: TARGET, anchorPath: ANCHOR, target: TARGET, targetName: "mainproj", isMultiRoot: true, platform: "win32" });
+    const renamed = apply(slot, true, rename);
+    assert.equal(await renamed.done, true);
+    assert.deepEqual(renamed.calls, [`update replace 1 1 ${TARGET} as mainproj`]);
   });
 });

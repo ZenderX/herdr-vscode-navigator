@@ -27,6 +27,18 @@ describe("planFolders", () => {
       index: 2,
       add: ["C:\\t"],
     });
+    // A worktree slot opened under its basename must be renamed in place to the project name, and only when the name differs.
+    const worktree = "C:\\mainproj\\develop";
+    const slot = { ...base, folders: [{ path: ANCHOR }, { path: worktree, name: "develop" }], trackedPath: worktree, target: worktree };
+    assert.deepEqual(planFolders({ ...slot, targetName: "mainproj" }), { kind: "replace", index: 1, add: [worktree], name: "mainproj" });
+    assert.deepEqual(planFolders({ ...slot, targetName: "develop" }), { kind: "noop", reason: "target already in tracked slot" });
+    assert.deepEqual(planFolders(slot), { kind: "noop", reason: "target already in tracked slot" });
+    assert.deepEqual(planFolders({ ...base, folders: open, trackedPath: "C:\\old", target: worktree, targetName: "mainproj" }), {
+      kind: "replace",
+      index: 1,
+      add: [worktree],
+      name: "mainproj",
+    });
   });
 
   it("never touches index 0 once two or more folders are open", () => {
@@ -42,14 +54,16 @@ describe("planFolders", () => {
     for (const set of sets) {
       for (const trackedPath of trackedOptions) {
         for (const target of targets) {
-          const plan: FolderPlan = planFolders({ folders: set, trackedPath, anchorPath: "C:\\a", target, isMultiRoot: true });
-          assert.notEqual(plan.kind, "convert", JSON.stringify({ set, trackedPath, target }));
-          if ("index" in plan) assert.ok(plan.index >= 1, JSON.stringify({ set, trackedPath, target, plan }));
-          checked += 1;
+          for (const targetName of [undefined, "mainproj"]) {
+            const plan: FolderPlan = planFolders({ folders: set, trackedPath, anchorPath: "C:\\a", target, targetName, isMultiRoot: true });
+            assert.notEqual(plan.kind, "convert", JSON.stringify({ set, trackedPath, target, targetName }));
+            if ("index" in plan) assert.ok(plan.index >= 1, JSON.stringify({ set, trackedPath, target, targetName, plan }));
+            checked += 1;
+          }
         }
       }
     }
-    assert.equal(checked, 100);
+    assert.equal(checked, 200);
   });
 
   it("treats a target that differs only in path form as already open, with case mattering on linux but not on win32 or darwin", () => {
@@ -61,6 +75,15 @@ describe("planFolders", () => {
     assert.equal(planFolders({ ...posix, target: "/home/u/a/../x/", platform: "linux" }).kind, "noop");
     assert.equal(planFolders({ ...posix, target: "/home/u/X", platform: "linux" }).kind, "replace");
     assert.equal(planFolders({ ...posix, target: "/home/u/X", platform: "darwin" }).kind, "noop");
+    const named = { ...posix, folders: [{ path: "/home/u/proj" }, { path: "/home/u/x", name: "x" }], platform: "linux" } as const;
+    assert.deepEqual(planFolders({ ...named, target: "/home/u/x/", targetName: "mainproj" }), { kind: "replace", index: 1, add: ["/home/u/x/"], name: "mainproj" });
+    assert.equal(planFolders({ ...named, target: "/home/u/x/", targetName: "x" }).kind, "noop");
+    assert.deepEqual(planFolders({ ...named, trackedPath: "/home/u/gone", target: "/home/u/y", targetName: "mainproj" }), {
+      kind: "append",
+      index: 2,
+      add: ["/home/u/y"],
+      name: "mainproj",
+    });
   });
 
   it("reclaims index 1 and drops stale folders after an adopted legacy anchor without touching index 0", () => {

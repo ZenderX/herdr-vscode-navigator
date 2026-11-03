@@ -2,14 +2,17 @@ import { samePath } from "../paths";
 
 export interface FolderLike {
   path: string;
+  /** The display name VS Code shows; absent means the basename of `path`. */
+  name?: string;
 }
 
+/** `name`, when present, is the display name of the target, the last `add` path. */
 export type FolderPlan =
   | { kind: "noop"; reason: string }
   | { kind: "convert"; start: number; deleteCount: number; add: string[] }
-  | { kind: "replace"; index: number; add: string[] }
-  | { kind: "reclaim"; index: number; deleteCount: number; add: string[] }
-  | { kind: "append"; index: number; add: string[] }
+  | { kind: "replace"; index: number; add: string[]; name?: string }
+  | { kind: "reclaim"; index: number; deleteCount: number; add: string[]; name?: string }
+  | { kind: "append"; index: number; add: string[]; name?: string }
   | { kind: "remove"; index: number };
 
 export interface PlanInput {
@@ -17,6 +20,8 @@ export interface PlanInput {
   trackedPath: string | null;
   anchorPath: string;
   target: string;
+  /** The display name the target's slot should show; absent keeps VS Code's default (the basename). */
+  targetName?: string;
   isMultiRoot: boolean;
   /** True only on the first follow of a window whose index 0 is a legacy anchor and where this install has never recorded a tracked slot: folders after it are the old install's, so the target takes index 1 and the rest go. */
   adoptedAnchor?: boolean;
@@ -81,14 +86,16 @@ function findTrackedIndex(folders: readonly FolderLike[], trackedPath: string | 
 }
 
 /** Decides the single updateWorkspaceFolders call that makes the window show the target. */
-export function planFolders({ folders, trackedPath, anchorPath, target, isMultiRoot, adoptedAnchor = false, platform }: PlanInput): FolderPlan {
+export function planFolders({ folders, trackedPath, anchorPath, target, targetName, isMultiRoot, adoptedAnchor = false, platform }: PlanInput): FolderPlan {
   const trackedIndex = findTrackedIndex(folders, trackedPath, platform);
+  // Spread instead of `name: undefined` so an unnamed plan keeps its exact shape.
+  const named = targetName === undefined ? {} : { name: targetName };
 
   // The old install's tracked slot is lost with its workspaceState, so its folders linger after the anchor; this runs once, before anything is recorded.
   // Reclaiming would re-add index 0; the stale folders stay until a different target arrives.
   if (adoptedAnchor && samePath(target, anchorPath, platform)) return { kind: "noop", reason: "target is the adopted anchor" };
   if (adoptedAnchor && folders.length >= 2 && !(folders.length === 2 && samePath(folders[1].path, target, platform))) {
-    return { kind: "reclaim", index: 1, deleteCount: folders.length - 1, add: [target] };
+    return { kind: "reclaim", index: 1, deleteCount: folders.length - 1, add: [target], ...named };
   }
 
   const alreadyOpenIndex = folders.findIndex(({ path }) => samePath(path, target, platform));
@@ -97,7 +104,11 @@ export function planFolders({ folders, trackedPath, anchorPath, target, isMultiR
     return { kind: "remove", index: trackedIndex };
   }
 
-  if (alreadyOpenIndex !== -1) return { kind: "noop", reason: "target already in tracked slot" };
+  if (alreadyOpenIndex !== -1) {
+    if (targetName === undefined || folders[alreadyOpenIndex].name === targetName) return { kind: "noop", reason: "target already in tracked slot" };
+    // VS Code renames a folder that is removed and re-added at the same index under a new name; the tracked index is never 0.
+    return { kind: "replace", index: alreadyOpenIndex, add: [target], name: targetName };
+  }
 
   if (folders.length === 0) {
     if (!anchorPath) throw new Error("anchorPath must be non-empty for an empty window");
@@ -112,7 +123,7 @@ export function planFolders({ folders, trackedPath, anchorPath, target, isMultiR
     return { kind: "convert", start: 0, deleteCount: 1, add: [anchorPath, target] };
   }
 
-  if (trackedIndex !== -1) return { kind: "replace", index: trackedIndex, add: [target] };
+  if (trackedIndex !== -1) return { kind: "replace", index: trackedIndex, add: [target], ...named };
 
-  return { kind: "append", index: folders.length, add: [target] };
+  return { kind: "append", index: folders.length, add: [target], ...named };
 }

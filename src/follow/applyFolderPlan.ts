@@ -1,6 +1,6 @@
 import type { Logger } from "../herdr";
 import { samePath } from "../paths";
-import type { FolderPlan } from "./planFolders";
+import type { FolderLike, FolderPlan } from "./planFolders";
 import { resolveMutation } from "./resolveMutation";
 
 /** The workspace operations a plan can end in; the adapter binds them to VS Code. */
@@ -8,8 +8,13 @@ export interface PlanEffects {
   openFolders: () => string[];
   /** Writes the saved navigator workspace and reopens the window on it (a reload). */
   convert: (anchorPath: string, target: string) => Promise<boolean>;
-  /** The in-place index edit; never reloads. */
-  updateFolders: (kind: string, start: number, deleteCount: number, add: string[]) => Promise<boolean>;
+  /** The in-place index edit; never reloads. A folder without a name shows its basename. */
+  updateFolders: (kind: string, start: number, deleteCount: number, add: FolderLike[]) => Promise<boolean>;
+}
+
+/** Only the target, the last added path, can carry a display name. */
+function namedFolders(add: readonly string[], name: string | undefined): FolderLike[] {
+  return add.map((path, index) => (name !== undefined && index === add.length - 1 ? { path, name } : { path }));
 }
 
 export interface HostingHandoff {
@@ -22,6 +27,8 @@ export interface HostingHandoff {
 
 export interface PendingTakeover {
   folder?: string;
+  /** The display name slot 1 gets when the folder is put there; absent keeps the basename. */
+  name?: string;
   /** When the takeover was recorded. */
   at: number;
 }
@@ -38,7 +45,7 @@ export async function applyPendingTakeover(
   platform: NodeJS.Platform,
   log: Logger,
 ): Promise<string | undefined> {
-  const { folder, at } = pending;
+  const { folder, name, at } = pending;
   if (folder === undefined || now - at > maxAgeMs) return undefined;
   const existing = effects.openFolders();
   if (existing.length === 0) return undefined;
@@ -52,7 +59,7 @@ export async function applyPendingTakeover(
     log("info", `mutation: takeover folder already open outside slot 1, nothing to do: ${folder}`);
     return undefined;
   }
-  const applied = await effects.updateFolders(plan.kind, mutation.start, mutation.deleteCount, mutation.add);
+  const applied = await effects.updateFolders(plan.kind, mutation.start, mutation.deleteCount, namedFolders(mutation.add, name));
   return applied ? folder : undefined;
 }
 
@@ -106,7 +113,7 @@ export async function applyFolderPlan(
   }
   const { start, deleteCount, add } = mutation;
 
-  if (plan.kind !== "convert") return effects.updateFolders(plan.kind, start, deleteCount, add);
+  if (plan.kind !== "convert") return effects.updateFolders(plan.kind, start, deleteCount, namedFolders(add, plan.kind === "remove" ? undefined : plan.name));
 
   const target = add[add.length - 1];
   // A kept navigator file is reopened as stored, so every conversion records its folder; only a hosting window also has herdr relaunched there.

@@ -3,7 +3,7 @@ import type { ProbeResult, ResolvedCwd } from "../cwd/types";
 import type { Logger, PaneInfo, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
 import type { FollowMode } from "./followMode";
-import { findGitRoot } from "./gitRoot";
+import { findGitRoot, worktreeParentName } from "./gitRoot";
 import { planFollowAction } from "./planFollow";
 import { planFolders } from "./planFolders";
 import type { FolderLike, FolderPlan } from "./planFolders";
@@ -45,6 +45,8 @@ export interface FollowControllerOptions {
   switchFolder: (target: string, isCurrent: () => boolean) => Promise<boolean>;
   /** Checks whether `<dir>/.git` exists; with followGitRoot on, the target snaps to the nearest ancestor that has one. */
   hasGitEntry?: (dir: string) => Promise<boolean>;
+  /** Contents of a file; undefined when it is missing or a directory. Names a linked-worktree root after its parent project. */
+  readTextFile?: (path: string) => Promise<string | undefined>;
   followGitRoot?: boolean;
   getFolders: () => readonly FolderLike[];
   isMultiRoot: () => boolean;
@@ -61,6 +63,8 @@ export interface FollowControllerOptions {
 export interface FollowState {
   autoFollow: boolean;
   trackedPath: string | null;
+  /** Display name of the tracked slot; undefined shows its basename. */
+  trackedName: string | undefined;
   lastTarget: string | null;
   busy: boolean;
   lastError: string | null;
@@ -71,6 +75,8 @@ export const realClock: Clock = {
   clearTimeout: (handle) => clearTimeout(handle as NodeJS.Timeout),
 };
 
+const namedAs = (name: string | undefined): string => (name === undefined ? "" : ` as ${name}`);
+
 function describePlan(plan: FolderPlan): string {
   switch (plan.kind) {
     case "noop":
@@ -79,9 +85,9 @@ function describePlan(plan: FolderPlan): string {
       return `convert: add ${plan.add.join(", ")}`;
     case "replace":
     case "append":
-      return `${plan.kind}: index ${plan.index} -> ${plan.add.join(", ")}`;
+      return `${plan.kind}: index ${plan.index} -> ${plan.add.join(", ")}${namedAs(plan.name)}`;
     case "reclaim":
-      return `reclaim: index ${plan.index} (delete ${plan.deleteCount}) -> ${plan.add.join(", ")}`;
+      return `reclaim: index ${plan.index} (delete ${plan.deleteCount}) -> ${plan.add.join(", ")}${namedAs(plan.name)}`;
     case "remove":
       return `remove: index ${plan.index}`;
   }
@@ -96,6 +102,7 @@ export class FollowController {
   private gitRootEnabled: boolean;
   private suppressFirstSwitch: boolean;
   private trackedPath: string | null = null;
+  private trackedName: string | undefined;
   private lastTarget: string | null = null;
   private lastError: string | null = null;
   private timer: unknown = null;
@@ -149,8 +156,21 @@ export class FollowController {
   }
 
   /** Restores the tracked slot after an extension-host restart or workspace reopen. */
-  setTrackedPath(path: string | null): void {
+  setTrackedPath(path: string | null, name?: string): void {
     this.trackedPath = path;
+    this.trackedName = name;
+  }
+
+  /** The display name a slot for dir gets: the parent project of a linked-worktree root, else undefined (its basename shows). */
+  async displayName(dir: string): Promise<string | undefined> {
+    const { readTextFile, platform, log } = this.options;
+    if (!readTextFile) return undefined;
+    try {
+      return await worktreeParentName(dir, { readTextFile, platform });
+    } catch (err: unknown) {
+      log?.("warn", `display name: ${dir} keeps its basename, reading its git metadata failed: ${errorText(err)}`);
+      return undefined;
+    }
   }
 
   /** Filters a pushed herdr event name by the focus events, then behaves like onFocusEvent. */
@@ -182,6 +202,7 @@ export class FollowController {
     return {
       autoFollow: this.autoFollow,
       trackedPath: this.trackedPath,
+      trackedName: this.trackedName,
       lastTarget: this.lastTarget,
       busy: this.loop !== null,
       lastError: this.lastError,
@@ -230,8 +251,9 @@ export class FollowController {
         `pane: id=${snapshot.focused_pane_id ?? "none"} tab=${snapshot.focused_tab_id ?? "none"} workspace=${snapshot.focused_workspace_id ?? "none"} cwd=${String(pane?.cwd)} foreground_cwd=${pane?.foreground_cwd ?? "absent"} terminal_title=${String(pane?.terminal_title ?? "absent")}`,
       );
 
-      const target = await this.resolveTargetPath(snapshot, pane);
-      if (target === null) return;
+      const followed = await this.resolveTargetPath(snapshot, pane);
+      if (followed === null) return;
+      const { target, name } = followed;
       this.lastTarget = target;
 
       const action = planFollowAction({
@@ -253,15 +275,15 @@ export class FollowController {
         await this.applyFolderMode(target, suppressed);
         return;
       }
-      await this.applyWorkspacePlan(target);
+      await this.applyWorkspacePlan(target, name);
     } catch (err: unknown) {
       this.lastError = err instanceof Error ? err.message : String(err);
       log?.("error", `follow failed: ${errorText(err)}`);
     }
   }
 
-  /** The directory to follow, or null when there is none or the focus changed while probing. */
-  private async resolveTargetPath(snapshot: SessionSnapshot, pane: PaneInfo | undefined): Promise<string | null> {
+  /** The directory to follow and its display name, or null when there is none or the focus changed while probing. */
+  private async resolveTargetPath(snapshot: SessionSnapshot, pane: PaneInfo | undefined): Promise<{ target: string; name: string | undefined } | null> {
     const { log, live } = this.options;
     let resolvedLive: ResolvedCwd | undefined;
     let probeMs: number | undefined;
@@ -293,9 +315,11 @@ export class FollowController {
         ? await findGitRoot(resolved.target, { hasGitEntry, platform: this.options.platform })
         : resolved.target;
     const snapped = target === resolved.target ? "" : ` (git root of ${resolved.target})`;
-    log?.("info", `target: ${target} via ${source} (${reason})${snapped}${detail}`);
+    // Only a worktree root holds the `.git` file, so a subfolder target gets no name and keeps its basename.
+    const name = await this.displayName(target);
+    log?.("info", `target: ${target}${namedAs(name)} via ${source} (${reason})${snapped}${detail}`);
     if (resolvedLive && source === "cwd") log?.("warn", HINT);
-    return target;
+    return { target, name };
   }
 
   // A newer focus (pending timer or rerun), a mode change, auto-follow turned off or dispose makes a decision stale.
@@ -319,13 +343,14 @@ export class FollowController {
     this.lastError = null;
   }
 
-  private async applyWorkspacePlan(target: string): Promise<void> {
+  private async applyWorkspacePlan(target: string, name: string | undefined): Promise<void> {
     const { log } = this.options;
     const plan = planFolders({
       folders: this.options.getFolders(),
       trackedPath: this.trackedPath,
       anchorPath: this.options.getAnchorPath(),
       target,
+      targetName: name,
       isMultiRoot: this.options.isMultiRoot(),
       adoptedAnchor: this.options.isAdoptedAnchor?.() ?? false,
       platform: this.options.platform,
@@ -351,6 +376,7 @@ export class FollowController {
       return;
     }
     this.trackedPath = plan.kind === "remove" ? null : target;
+    this.trackedName = plan.kind === "remove" ? undefined : name;
     this.lastError = null;
   }
 }

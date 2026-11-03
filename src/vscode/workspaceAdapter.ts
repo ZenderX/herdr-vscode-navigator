@@ -9,15 +9,15 @@ import { prepareNavigatorWorkspaceFile } from "./navigatorFile";
 const FOLDERS_EVENT_TIMEOUT_MS = 5000;
 
 export function getFolders(): FolderLike[] {
-  return (vscode.workspace.workspaceFolders ?? []).map(({ uri }) => ({ path: uri.fsPath }));
+  return (vscode.workspace.workspaceFolders ?? []).map(({ uri, name }) => ({ path: uri.fsPath, name }));
 }
 
 export function isMultiRoot(): boolean {
   return vscode.workspace.workspaceFile !== undefined;
 }
 
-function toFolders(paths: readonly string[]): { uri: vscode.Uri; name: string }[] {
-  return paths.map((p) => ({ uri: vscode.Uri.file(p), name: path.basename(p) }));
+function toFolders(folders: readonly FolderLike[]): { uri: vscode.Uri; name: string }[] {
+  return folders.map(({ path: p, name }) => ({ uri: vscode.Uri.file(p), name: name ?? path.basename(p) }));
 }
 
 function folderList(): string {
@@ -88,7 +88,7 @@ export function workspaceEffects(log: Logger): PlanEffects {
     openFolders: () => getFolders().map(({ path: open }) => open),
     convert: (anchorPath, target) => convertToNavigatorWorkspace(anchorPath, target, log),
     updateFolders: async (kind, start, deleteCount, add) => {
-      const uris = toFolders(add).map(({ uri }) => uri.toString());
+      const uris = toFolders(add).map(({ uri, name }) => `${uri.toString()} as ${name}`);
       log("info", `mutation: folders before ${folderList()}`);
       log("info", `mutation: updateWorkspaceFolders(start=${start}, deleteCount=${deleteCount}, add=[${uris.join(", ")}])`);
       const count = getFolders().length;

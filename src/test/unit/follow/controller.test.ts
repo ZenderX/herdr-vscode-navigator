@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { posix, win32 } from "node:path";
 import type { ProbeResult } from "../../../cwd/types";
 import type { PaneInfo, SessionSnapshot } from "../../../herdr";
 import { FollowController } from "../../../follow/controller";
@@ -196,10 +197,34 @@ describe("FollowController", () => {
   });
 
   describe("git root snapping", () => {
-    function gitController(cwd: string, followGitRoot: boolean, lines: string[] = []) {
+    // `repo` is a plain checkout (a `.git` directory, which reads as missing); `worktree` is a linked worktree of the project mainproj.
+    interface GitLayout {
+      platform: NodeJS.Platform;
+      anchor: string;
+      repo: string;
+      worktree: string;
+      files: Record<string, string>;
+    }
+    const WIN: GitLayout = {
+      platform: "win32",
+      anchor: "C:\\anchor",
+      repo: "C:\\repo",
+      worktree: "C:\\mainproj\\develop",
+      files: { "C:\\mainproj\\develop\\.git": "gitdir: C:/mainproj/.bare/worktrees/develop\n", "C:\\mainproj\\.bare\\worktrees\\develop\\commondir": "../..\n" },
+    };
+    const LINUX: GitLayout = {
+      platform: "linux",
+      anchor: "/anchor",
+      repo: "/repo",
+      worktree: "/home/u/mainproj/develop",
+      files: { "/home/u/mainproj/develop/.git": "gitdir: /home/u/mainproj/.git/worktrees/develop\n", "/home/u/mainproj/.git/worktrees/develop/commondir": "../..\n" },
+    };
+
+    function gitController(cwd: string, followGitRoot: boolean, layout: GitLayout = WIN, slot: FolderLike = { path: layout.repo }) {
       const plans: FolderPlan[] = [];
+      const lines: string[] = [];
       const controller = new FollowController({
-        platform: "win32",
+        platform: layout.platform,
         fetchSnapshot: async () => snap(cwd),
         applyPlan: async (plan) => {
           plans.push(plan);
@@ -207,21 +232,22 @@ describe("FollowController", () => {
         },
         persistPendingTarget: async () => {},
         switchFolder: async () => false,
-        hasGitEntry: async (dir) => dir === "C:\\repo",
+        hasGitEntry: async (dir) => dir === layout.repo || dir === layout.worktree,
+        readTextFile: async (file) => layout.files[file],
         followGitRoot,
-        getFolders: () => [{ path: "C:\\anchor" }, { path: "C:\\repo" }],
+        getFolders: () => [{ path: layout.anchor }, slot],
         isMultiRoot: () => true,
-        getAnchorPath: () => "C:\\anchor",
+        getAnchorPath: () => layout.anchor,
         autoFollow: true,
         debounceMs: 0,
         cwdSource: "auto",
         log: (level, msg) => lines.push(`[${level}] ${msg}`),
       });
-      controller.setTrackedPath("C:\\repo");
+      controller.setTrackedPath(slot.path);
       return { controller, plans, lines };
     }
 
-    it("treats a subfolder of the tracked repository as a no-op, and follows the exact directory when the setting is off", async () => {
+    it("treats a subfolder of the tracked repository as a no-op, follows the exact directory when the setting is off, and names a worktree root after its project", async () => {
       const snapped = gitController("C:\\repo\\src\\game", true);
       await snapped.controller.followNow();
       assert.deepEqual(snapped.plans, []);
@@ -231,6 +257,33 @@ describe("FollowController", () => {
       exact.controller.setFollowGitRoot(false);
       await exact.controller.followNow();
       assert.deepEqual(exact.plans, [{ kind: "replace", index: 1, add: ["C:\\repo\\src\\game"] }]);
+
+      // The worktree's own folder name must never label the slot: it is the branch, not the project.
+      for (const layout of [WIN, LINUX]) {
+        const { join } = layout.platform === "win32" ? win32 : posix;
+        const worktree = gitController(join(layout.worktree, "src"), true, layout);
+        await worktree.controller.followNow();
+        assert.deepEqual(worktree.plans, [{ kind: "replace", index: 1, add: [layout.worktree], name: "mainproj" }], layout.platform);
+        assert.equal(worktree.controller.getState().trackedName, "mainproj");
+        assert.ok(worktree.lines.some((line) => line.includes(`target: ${layout.worktree} as mainproj via`)), layout.platform);
+
+        const restored = gitController(layout.worktree, true, layout, { path: layout.worktree, name: "develop" });
+        await restored.controller.followNow();
+        assert.deepEqual(restored.plans, [{ kind: "replace", index: 1, add: [layout.worktree], name: "mainproj" }], layout.platform);
+
+        const named = gitController(layout.worktree, true, layout, { path: layout.worktree, name: "mainproj" });
+        await named.controller.followNow();
+        assert.deepEqual(named.plans, [], layout.platform);
+
+        const subfolder = gitController(join(layout.worktree, "src"), false, layout);
+        await subfolder.controller.followNow();
+        assert.deepEqual(subfolder.plans, [{ kind: "replace", index: 1, add: [join(layout.worktree, "src")] }], layout.platform);
+
+        const plain = gitController(join(layout.repo, "src"), true, layout, { path: layout.worktree });
+        await plain.controller.followNow();
+        assert.deepEqual(plain.plans, [{ kind: "replace", index: 1, add: [layout.repo] }], layout.platform);
+        assert.equal(plain.controller.getState().trackedName, undefined);
+      }
     });
   });
 });

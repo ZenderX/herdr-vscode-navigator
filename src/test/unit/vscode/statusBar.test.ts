@@ -27,6 +27,11 @@ describe("StatusBar main item", () => {
     assert.equal(item.color, undefined);
     assert.equal(item.command, TOGGLE_COMMAND);
 
+    // A linked worktree's folder is the branch; the label shows the project name the slot carries.
+    bar.update(true, true, "/proj/mainproj/develop", true, undefined, true, "mainproj");
+    assert.match(item.text, /^\$\(eye\) herdr: mainproj$/);
+    assert.match(String(item.tooltip), /^\/proj\/mainproj\/develop\n/);
+
     bar.update(false, false, null, false);
     assert.match(item.text, /^\$\(eye-closed\)/);
     assert.deepEqual(item.color, { id: "disabledForeground" });

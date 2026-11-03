@@ -1,4 +1,4 @@
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
 import * as vscode from "vscode";
@@ -100,6 +100,23 @@ function hasGitEntry(dir: string): Promise<boolean> {
       throw err;
     },
   );
+}
+
+// A `.git` directory reads as EISDIR: that is a main checkout, not a linked worktree.
+function readTextFile(file: string): Promise<string | undefined> {
+  return readFile(file, "utf8").then(
+    (text) => text,
+    (err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT" || err.code === "ENOTDIR" || err.code === "EISDIR") return undefined;
+      throw err;
+    },
+  );
+}
+
+/** The slot the status bar shows; a name absent shows the path's basename. */
+interface TrackedSlot {
+  path: string | null;
+  name?: string;
 }
 
 // Only a completed connect proves a server; only a missing socket proves none. A busy pipe or a timeout is doubt.
@@ -279,7 +296,7 @@ interface ControllerEnv {
   fetchSnapshot: () => Promise<SessionSnapshot>;
   refreshAnchor: () => Promise<void>;
   chosenAnchor: () => AnchorChoice;
-  refreshStatus: (tracked?: string | null) => void;
+  refreshStatus: (slot?: TrackedSlot) => void;
   onSnapshot: (snapshot: SessionSnapshot) => void;
   liveProbe: LiveCwdProbe;
   probePlatform: NodeJS.Platform;
@@ -349,7 +366,7 @@ function createController(env: ControllerEnv): FollowController {
       if (!applied || plan.kind === "noop") return applied;
       const tracked = plan.kind === "remove" ? null : (plan.add[plan.add.length - 1] ?? null);
       await context.workspaceState.update(TRACKED_KEY, tracked);
-      env.refreshStatus(tracked);
+      env.refreshStatus({ path: tracked, name: plan.kind === "remove" || plan.kind === "convert" ? undefined : plan.name });
       return true;
     },
     onSnapshot: env.onSnapshot,
@@ -358,6 +375,7 @@ function createController(env: ControllerEnv): FollowController {
       return Promise.resolve(context.globalState.update(PENDING_KEY, pending));
     },
     hasGitEntry,
+    readTextFile,
     followGitRoot: settings.followGitRoot,
     getFolders,
     isMultiRoot,
@@ -591,7 +609,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     fetchSnapshot,
     refreshAnchor: async () => void (anchorPath = await resolveAnchor(context)),
     chosenAnchor,
-    refreshStatus: (tracked) => refreshStatus(tracked),
+    refreshStatus: (slot) => refreshStatus(slot),
     onSnapshot: (snapshot) => {
       poller.observe(snapshot);
       returnService.observeSnapshot(snapshot);
@@ -630,11 +648,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     returnService,
   });
 
-  function refreshStatus(tracked: string | null = controller.getState().trackedPath): void {
+  // An applied plan passes its slot: the controller records the slot only once applyPlan resolves.
+  function refreshStatus(slot?: TrackedSlot): void {
+    const { trackedPath, trackedName, autoFollow } = controller.getState();
+    const { path: tracked, name } = slot ?? { path: trackedPath, name: trackedName };
     const connected = connection.isConnected();
-    const autoFollow = controller.getState().autoFollow;
     const suppressed = !autoFollow || consent.autoAllowed() ? undefined : consent.suppressionReason();
-    statusBar.update(connected, autoFollow, tracked, host.get() !== "no", suppressed, !showsNotInstalled(presence.get()));
+    statusBar.update(connected, autoFollow, tracked, host.get() !== "no", suppressed, !showsNotInstalled(presence.get()), name);
     poller.start(pollIntervalMs({ connected, autoFollow, host: host.get(), confirmedHere: consent.confirmedHere(), cwdPollMs: settings.cwdPollMs }));
   }
 
@@ -652,7 +672,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     now: Date.now(),
     platform,
-    setTrackedPath: (path) => controller.setTrackedPath(path),
+    displayName: (folder) => controller.displayName(folder),
+    setTrackedPath: (path, name) => controller.setTrackedPath(path, name),
     saveTracked: (path) => Promise.resolve(context.workspaceState.update(TRACKED_KEY, path)),
     adoptConfirmation: consent.adopt,
     clearPending: () => Promise.resolve(context.globalState.update(PENDING_KEY, undefined)),
