@@ -1,16 +1,8 @@
 node_modules/
 out/
 *.vsix
-bash.exe.stackdump
+*.stackdump
 .vscode-test/
-
-# Job folders, active and archived
-.claude/conductor/jobs/
-
-# Per-user agent memory and machine-local state
-.claude/agent-memory/
-.claude/conductor/environment.md
-.claude/settings.local.json
 
 # Python bytecode caches
 __pycache__/
@@ -18,4 +10,19 @@ __pycache__/
 
 # OS cruft
 .DS_Store
+Thumbs.db
+
+# Agent state: machine-local files
+.claude/agent-memory/
+.claude/conductor/environment.md
+.claude/settings.local.json
+**/.think_state.json
+# Job folders: ignore the contents
+.claude/conductor/jobs/*
+.claude/refuter/jobs/*
+
+# baton plugin state, same shape
+.baton/environment.md
+.baton/conductor/jobs/*
+.baton/refuter/jobs/*
 
