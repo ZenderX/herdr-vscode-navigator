@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 — 2026-11-03
 
 - Removed the session folder repair added in v0.1.3: the command `Herdr Navigator: Repair herdr session folders` (`herdrNavigator.repairSessionFolders`), the setting `herdrNavigator.repairSessionOnLaunch` and the restore manifest written to the extension's global storage are gone. herdr's own session restore is used as is.
 - The extension no longer writes, renames or backs up herdr's `session.json`, and never changes herdr's saved state.
