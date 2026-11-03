@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.1 — 2026-11-03
 
 - Fixed a unit test that assumed Windows path separators, so the release build's test step passes on Linux. v0.2.0 was tagged but never published; v0.2.1 is the first 0.2 release.
 
