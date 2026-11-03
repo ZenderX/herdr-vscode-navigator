@@ -25,12 +25,12 @@ export interface RecordedTitle {
 }
 
 /** VS Code's template scanner has no escape: a `$` opens a variable, so it is swapped for a fullwidth dollar. */
-export function sanitizeLabel(label: string): string {
+function sanitizeLabel(label: string): string {
   return label.replace(/\$/g, "＄").replace(/[\r\n]+/g, " ");
 }
 
 /** Returns the title to write, or undefined when the template has no root-name token to replace. */
-export function buildWindowTitle(template: string, label: string): string | undefined {
+function buildWindowTitle(template: string, label: string): string | undefined {
   const slot = sanitizeLabel(label);
   const title = template.replace(ROOT_TOKEN, () => slot);
   return title === template ? undefined : title;

@@ -21,7 +21,7 @@ export interface ProcessInfo {
 }
 
 /** Parses Get-CimInstance JSON; a single process serializes as an object, not an array. */
-export function parseProcessTable(json: string): ProcessInfo[] {
+function parseProcessTable(json: string): ProcessInfo[] {
   const parsed: unknown = JSON.parse(json);
   const rows = Array.isArray(parsed) ? parsed : [parsed];
   const table: ProcessInfo[] = [];

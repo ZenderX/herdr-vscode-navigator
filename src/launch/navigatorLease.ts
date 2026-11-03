@@ -14,7 +14,7 @@ export const LEASE_STALE_MS = 60_000;
 export const TAKEOVER_GRACE_MS = 3_000;
 
 /** Parses a lease; one written with the old per-window `sessionId` gets a launch id that no launch matches. */
-export function parseLease(value: unknown): NavigatorLease | undefined {
+function parseLease(value: unknown): NavigatorLease | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   const { launchId, sessionId, writtenAt, folder } = value as Record<string, unknown>;
   if (typeof writtenAt !== "number" || typeof folder !== "string") return undefined;

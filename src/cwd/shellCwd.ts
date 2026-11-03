@@ -14,7 +14,7 @@ const LSOF_TIMEOUT_MS = 3000;
 
 // Args are Windows pids; exit 1 when none has an MSYS /proc entry, exit 2 when a tool is missing or fails. First pid in argument order wins.
 // A non-login bash started from a native process lacks /usr/bin on PATH, so PATH is set first and winpid is read with the `read` builtin.
-export const MSYS_CWD_SCRIPT =
+const MSYS_CWD_SCRIPT =
   'PATH=/usr/bin:$PATH; [ -x /usr/bin/readlink ] && [ -x /usr/bin/cygpath ] || exit 2; for w in "$@"; do for f in /proc/[0-9]*/winpid; do v=; { read -r v < "$f"; } 2>/dev/null; if [ "$v" = "$w" ]; then d=$(readlink "${f%/winpid}/cwd") || exit 2; cygpath -w "$d" || exit 2; exit 0; fi; done; done; exit 1';
 
 // Prints the Windows pids of the direct children of $root.
@@ -23,11 +23,11 @@ export const CHILDREN_SCRIPT =
 
 // Prints every MSYS bash's Windows pid, then each one's cwd in the same order; builtins only per /proc entry (~50 ms for any count, a $(...) each costs seconds).
 // cd -P pairs pid and folder inside the loop and hands cygpath resolved folders, since a vanished pid aborts a multi-arg cygpath of /proc links.
-export const MSYS_SHELLS_SCRIPT =
+const MSYS_SHELLS_SCRIPT =
   'PATH=/usr/bin:$PATH; [ -x /usr/bin/cygpath ] || exit 2; W=(); D=(); for f in /proc/[0-9]*; do w=; e=; { read -r w < "$f/winpid"; read -r e < "$f/exename"; } 2>/dev/null; [ -n "$w" ] && [ "$e" = /usr/bin/bash ] || continue; cd -P "$f/cwd" 2>/dev/null || continue; W+=("$w"); D+=("$PWD"); done; [ ${#W[@]} -gt 0 ] || exit 0; printf \'%s\\n\' "${W[@]}"; exec cygpath -w "${D[@]}"';
 
 // Args are Windows pids; prints "<parent> <child>" for every direct child of any of them, in one CIM query.
-export const CHILD_PAIRS_SCRIPT =
+const CHILD_PAIRS_SCRIPT =
   "& { $f = ($args | ForEach-Object { 'ParentProcessId=' + $_ }) -join ' OR '; Get-CimInstance Win32_Process -Filter $f | ForEach-Object { [string]$_.ParentProcessId + ' ' + $_.ProcessId } }";
 
 const NOT_MSYS = "not an MSYS process";
@@ -43,7 +43,7 @@ function exitCode(error: unknown): unknown {
 }
 
 /** Extracts the cwd path from `lsof -Fn` output (`p<pid>`, `fcwd`, `n<path>`). */
-export function parseLsofCwd(stdout: string): string | null {
+function parseLsofCwd(stdout: string): string | null {
   const line = stdout.split(/\r?\n/).find((entry) => entry.startsWith("n"));
   return line && line.length > 1 ? line.slice(1) : null;
 }

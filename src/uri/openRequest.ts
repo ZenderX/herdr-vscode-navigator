@@ -2,7 +2,6 @@ export type OpenRequestResult =
   | { ok: true; spaceId: string; session?: string }
   | { ok: false; reason: string };
 
-const EXTENSION_ID = "z3nder.herdr-navigator";
 const SPACE_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 const SESSION_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
 
@@ -36,8 +35,3 @@ export function parseOpenRequest(input: { path: string; query: string }): OpenRe
   return { ok: true, spaceId: spaces[0], session: sessions[0] };
 }
 
-export function buildOpenUri(scheme: string, spaceId: string, session?: string): string {
-  const query = `space=${encodeURIComponent(spaceId)}`;
-  const sessionPart = session === undefined ? "" : `&session=${encodeURIComponent(session)}`;
-  return `${scheme}://${EXTENSION_ID}/open?${query}${sessionPart}`;
-}

@@ -1,6 +1,6 @@
 import type { OpenRequestResult } from "../uri/openRequest";
 
-export const DEFAULT_TERMINAL_NAME = "herdr";
+const DEFAULT_TERMINAL_NAME = "herdr";
 
 export type OpenPlan =
   | { action: "reject"; reason: string }
@@ -20,7 +20,7 @@ export function terminalNameFor(session: string | undefined): string {
 }
 
 // `--session` goes before the subcommand; it is the only thing that selects a session for `workspace` commands.
-export function focusArgsFor(spaceId: string, session: string | undefined): string[] {
+function focusArgsFor(spaceId: string, session: string | undefined): string[] {
   return [...(session === undefined ? [] : ["--session", session]), "workspace", "focus", spaceId];
 }
 

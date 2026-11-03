@@ -11,13 +11,13 @@ const BUSY_CHECK_TIMEOUT_MS = 5000;
  * Windows rule: the pane's MSYS shells are the rows whose Windows pid is `shell_pid` or one of its direct Win32 children
  * (Git Bash's native launcher spawns the real MSYS bash); the pane is busy iff one of them has an MSYS child.
  */
-export function msysShellBusy(edges: readonly MsysEdge[], shellPid: number, win32Children: readonly number[]): boolean {
+function msysShellBusy(edges: readonly MsysEdge[], shellPid: number, win32Children: readonly number[]): boolean {
   const shells = new Set([shellPid, ...win32Children]);
   return edges.some(({ parent }) => shells.has(parent));
 }
 
 /** Unix rule (inferred by the plugin, unmeasured): a second foreground process or a foreign foreground group means busy. */
-export function foregroundBusy({ shell_pid, foreground_process_group_id, foreground_processes }: PaneProcessInfo): boolean {
+function foregroundBusy({ shell_pid, foreground_process_group_id, foreground_processes }: PaneProcessInfo): boolean {
   if (foreground_processes.length > 1) return true;
   return typeof foreground_process_group_id === "number" && foreground_process_group_id !== shell_pid;
 }

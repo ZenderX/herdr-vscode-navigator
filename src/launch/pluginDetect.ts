@@ -18,7 +18,7 @@ function pluginsOf(json: unknown): unknown[] | undefined {
 }
 
 /** Reads `herdr plugin list --json` output: a bare array, `{plugins}`, or `{result: {plugins}}` (the shape herdr 0.9 prints, with `plugin_id`). */
-export function parsePluginList(stdout: string): PluginState {
+function parsePluginList(stdout: string): PluginState {
   let json: unknown;
   try {
     json = JSON.parse(stdout);

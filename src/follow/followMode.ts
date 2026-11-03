@@ -1,4 +1,4 @@
-export const FOLLOW_MODES = ["folder", "workspace"] as const;
+const FOLLOW_MODES = ["folder", "workspace"] as const;
 export type FollowMode = (typeof FOLLOW_MODES)[number];
 
 // Workspace by default: folder mode reloads the window, which closes integrated terminals.

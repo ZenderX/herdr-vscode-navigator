@@ -7,7 +7,7 @@ import type { PaneEntry } from "./record";
  * Skip reasons in the plugin's evaluation order; the caller reports `busy-timeout` (still busy when the readiness window
  * ends) and `error` (a failed send).
  */
-export const SKIP_REASONS = ["no-pane", "same", "unknown-spawn", "mismatch", "missing-folder", "agent", "not-ready", "busy", "busy-timeout", "error"] as const;
+const SKIP_REASONS = ["no-pane", "same", "unknown-spawn", "mismatch", "missing-folder", "agent", "not-ready", "busy", "busy-timeout", "error"] as const;
 export type SkipReason = (typeof SKIP_REASONS)[number];
 
 export interface PlannerPane {
@@ -52,7 +52,7 @@ export function paneHasAgent(pane: PaneInfo): boolean {
 }
 
 // One argument for a POSIX shell: '\'' closes, escapes and reopens the quote.
-export function cdCommand(folder: string): string {
+function cdCommand(folder: string): string {
   return `cd '${folder.replace(/'/g, "'\\''")}'`;
 }
 

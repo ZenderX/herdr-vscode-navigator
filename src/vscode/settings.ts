@@ -14,7 +14,7 @@ export interface Settings {
   followGitRoot: boolean;
 }
 
-export const SECTION = "herdrNavigator";
+const SECTION = "herdrNavigator";
 
 export function readSettings(): Settings {
   const config = vscode.workspace.getConfiguration(SECTION);

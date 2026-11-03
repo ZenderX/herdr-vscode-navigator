@@ -1,11 +1,11 @@
 import type { HerdrPresenceState } from "./herdrPresence";
 import type { PluginState } from "./pluginDetect";
 
-export const PLUGIN_INSTALL_COMMAND = "herdr plugin install ZenderX/herdr-vscode-navigator/plugin";
+const PLUGIN_INSTALL_COMMAND = "herdr plugin install ZenderX/herdr-vscode-navigator/plugin";
 export const PLUGIN_README_URL = "https://github.com/ZenderX/herdr-vscode-navigator/blob/main/plugin/README.md";
 export const PLUGIN_HINT_DISMISSED_KEY = "herdrNavigator.pluginHintDismissed";
 
-export const HINT_EXPLANATION =
+const HINT_EXPLANATION =
   "The optional herdr plugin re-focuses your last space after herdr crashes, is force-killed or the machine reboots, including when herdr runs outside VS Code.";
 export const HINT_INSTALL = "Install";
 export const HINT_LEARN_MORE = "Learn more";

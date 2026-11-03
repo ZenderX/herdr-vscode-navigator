@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildOpenUri, parseOpenRequest } from "../../../uri/openRequest";
+import { parseOpenRequest } from "../../../uri/openRequest";
 
 describe("parseOpenRequest", () => {
   it("accepts /open with a space and an optional session", () => {
@@ -19,18 +19,5 @@ describe("parseOpenRequest", () => {
     assert.equal(parseOpenRequest({ path: "/open", query: "space=a&space=b" }).ok, false);
     assert.equal(parseOpenRequest({ path: "/open", query: "space=a&session=a:b" }).ok, false);
     assert.equal(parseOpenRequest({ path: "/open", query: "session=s" }).ok, false);
-  });
-});
-
-describe("buildOpenUri", () => {
-  it("builds the canonical URI that round-trips through the parser", () => {
-    assert.equal(buildOpenUri("vscode", "w1"), "vscode://z3nder.herdr-navigator/open?space=w1");
-    const uri = new URL(buildOpenUri("vscode-insiders", "w_1:2", "main.1"));
-    assert.equal(uri.protocol, "vscode-insiders:");
-    assert.deepEqual(parseOpenRequest({ path: uri.pathname, query: decodeURIComponent(uri.search.slice(1)) }), {
-      ok: true,
-      spaceId: "w_1:2",
-      session: "main.1",
-    });
   });
 });
