@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- When the followed folder is a linked git worktree, the workspace folder in the Explorer and the status bar label now show the main project's name instead of the worktree's folder name. The name is read from the worktree's `.git` file, so it works whether the main project is a normal checkout, a bare repository (`<project>.git`) or a `.bare` layout. Folders that are not a worktree root (plain repositories, submodules, subfolders) keep their own name.
+- A workspace folder already open under the worktree's folder name is renamed in place, including after a window reload.
+
 ## v0.2.1 — 2026-11-03
 
 - Fixed a unit test that assumed Windows path separators, so the release build's test step passes on Linux. v0.2.0 was tagged but never published; v0.2.1 is the first 0.2 release.
