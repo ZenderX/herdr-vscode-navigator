@@ -22,7 +22,7 @@ describe("StatusBar main item", () => {
   it("shows the auto-follow eye and toggles it while herdr runs, offers launch otherwise, and the install page when herdr is missing", () => {
     const item = fakeItem();
     const bar = new StatusBar(item, themeColor);
-    bar.update(true, true, "C:\\proj\\app", true);
+    bar.update(true, true, "/proj/app", true);
     assert.match(item.text, /^\$\(eye\) herdr: app/);
     assert.equal(item.color, undefined);
     assert.equal(item.command, TOGGLE_COMMAND);

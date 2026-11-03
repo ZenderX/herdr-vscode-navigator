@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed a unit test that assumed Windows path separators, so the release build's test step passes on Linux. v0.2.0 was tagged but never published; v0.2.1 is the first 0.2 release.
+
 ## v0.2.0 — 2026-11-03
 
 - Removed the session folder repair added in v0.1.3: the command `Herdr Navigator: Repair herdr session folders` (`herdrNavigator.repairSessionFolders`), the setting `herdrNavigator.repairSessionOnLaunch` and the restore manifest written to the extension's global storage are gone. herdr's own session restore is used as is.
