@@ -33,8 +33,14 @@ export interface PendingTakeover {
   at: number;
 }
 
+function takeoverPlan(folder: string, openCount: number): Exclude<FolderPlan, { kind: "noop" }> {
+  if (openCount === 1) return { kind: "append", index: 1, add: [folder] };
+  if (openCount === 2) return { kind: "replace", index: 1, add: [folder] };
+  return { kind: "reclaim", index: 1, deleteCount: openCount - 1, add: [folder] };
+}
+
 /**
- * Puts a fresh pending takeover folder into slot 1 of a saved navigator, leaving index 0 and slots from 2 on alone, and never reloads.
+ * Puts a fresh pending takeover folder into slot 1 of a saved navigator, removing every other folder after index 0 unless it is already there, and never reloads.
  * Resolves the folder now in slot 1, or undefined when nothing was pending, it is stale, or the change was not made.
  */
 export async function applyPendingTakeover(
@@ -53,7 +59,7 @@ export async function applyPendingTakeover(
     log("info", `plan: noop (takeover folder already in slot 1: ${folder})`);
     return folder;
   }
-  const plan: FolderPlan = existing.length > 1 ? { kind: "replace", index: 1, add: [folder] } : { kind: "append", index: 1, add: [folder] };
+  const plan = takeoverPlan(folder, existing.length);
   const mutation = resolveMutation(plan, existing, platform);
   if (mutation === null) {
     log("info", `mutation: takeover folder already open outside slot 1, nothing to do: ${folder}`);

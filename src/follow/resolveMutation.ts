@@ -19,7 +19,7 @@ export function resolveMutation(plan: Exclude<FolderPlan, { kind: "noop" }>, ope
       mutation = { start: plan.index, deleteCount: 0, add: plan.add };
       break;
     case "remove":
-      return { start: plan.index, deleteCount: 1, add: [] };
+      return { start: plan.index, deleteCount: plan.deleteCount, add: [] };
   }
   const { start, deleteCount, add } = mutation;
   // Folders inside the deleted range are removed by this same call, so re-adding one of them is legal and wanted.

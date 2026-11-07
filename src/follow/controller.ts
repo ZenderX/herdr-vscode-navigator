@@ -89,7 +89,7 @@ function describePlan(plan: FolderPlan): string {
     case "reclaim":
       return `reclaim: index ${plan.index} (delete ${plan.deleteCount}) -> ${plan.add.join(", ")}${namedAs(plan.name)}`;
     case "remove":
-      return `remove: index ${plan.index}`;
+      return `remove: index ${plan.index} (delete ${plan.deleteCount})`;
   }
 }
 

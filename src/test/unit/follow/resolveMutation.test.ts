@@ -21,5 +21,6 @@ describe("resolveMutation", () => {
     assert.equal(mutate({ kind: "replace", index: 2, add: [STALE] }), null);
     assert.equal(mutate({ kind: "append", index: 3, add: ["C:\\WORKTREES\\STALE"] }), null);
     assert.deepEqual(resolveMutation({ kind: "append", index: 3, add: ["/A"] }, ["/a"], "linux"), { start: 3, deleteCount: 0, add: ["/A"] });
+    assert.deepEqual(mutate({ kind: "remove", index: 1, deleteCount: 2 }), { start: 1, deleteCount: 2, add: [] });
   });
 });

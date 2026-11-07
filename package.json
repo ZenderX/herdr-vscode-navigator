@@ -69,6 +69,10 @@
       {
         "command": "herdrNavigator.showDiagnostics",
         "title": "Herdr Navigator: Show Diagnostics"
+      },
+      {
+        "command": "herdrNavigator.initRepository",
+        "title": "Initialize Repository in Followed Folder"
       }
     ],
     "menus": {
@@ -76,9 +80,20 @@
         {
           "command": "herdrNavigator.openHerdrInstall",
           "when": "false"
+        },
+        {
+          "command": "herdrNavigator.initRepository",
+          "when": "herdrNavigator.initOffer"
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "scm",
+        "contents": "The followed folder has no Git repository. Initialize one there, never in the anchor.\n[Initialize Repository in Followed Folder](command:herdrNavigator.initRepository)",
+        "when": "config.git.enabled && herdrNavigator.initOffer"
+      }
+    ],
     "keybindings": [
       {
         "command": "herdrNavigator.followNow",

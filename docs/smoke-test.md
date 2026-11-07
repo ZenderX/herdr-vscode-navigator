@@ -220,6 +220,46 @@ Manual checks only; no script automates these scenarios. Needs herdr on PATH and
 5. Legacy migration (D). With the previous release's behaviour (or by converting a window with `updateWorkspaceFolders` in a probe), create an untitled `[anchor, folder]` workspace, quit, relaunch.
    Expected: log `auto-launch: legacy-untitled`, a message that the workspace is moving into a file; after Continue, VS Code asks once to save the old untitled workspace (choose Don't Save); the window reloads as the saved navigator and herdr starts in it.
 
+## Source Control follows the space
+
+The rule: Source Control keeps the repository of the selected space, the longest open root that equals or contains the followed folder, and drops every other one each time it opens. The exception, in step 10, is any repository under a folder whose own settings set `git.enabled: true`.
+
+The checks below are manual and have not been run yet: they need herdr on PATH and the installed VSIX in a normal window with `followMode: workspace`. The Git API cannot observe the welcome content, so read the Source Control view by eye.
+
+Setup: `C:\Users\me\Projects\parentdir` has no `.git`, `C:\Users\me\Projects\parentdir\nestedrepo` and `C:\Users\me\Projects\repoA` are Git repositories, and a herdr space sits in each of the three. Steps 7 to 10 add their own folders.
+
+1. Nested repository, fresh start. Quit VS Code, delete `navigator.code-workspace`, then start the navigator following `parentdir`, and quit and start it again.
+   Expected: the file's `settings` hold `"git.autoRepositoryDetection": false`, `"git.detectSubmodules": false`, `"git.detectWorktrees": false` and `"git.openRepositoryInParentFolders": "always"`; `anchor\.vscode\settings.json` holds `"git.enabled": false`. After the second start `nestedrepo` never appears in Source Control, and the log has no `scm: dropping` line.
+2. Nested repository, upgraded file. Quit VS Code with `parentdir` followed, remove those four keys from `navigator.code-workspace`, and start VS Code.
+   Expected: `nestedrepo` may appear briefly, the log has `scm: dropping C:\Users\me\Projects\parentdir\nestedrepo`, and Source Control ends with no repository and the Initialize offer. The four keys are back in the file, `git.ignoredRepositories` lists `nestedrepo`, and the file holds no `git.enabled` key.
+3. Switch with a departed repository's file visible. Follow `repoA`, open one of its files in a split, then switch herdr to the `nestedrepo` space.
+   Expected: the log has `scm: dropping C:\Users\me\Projects\repoA`, Source Control lists only `nestedrepo`, the `repoA` tab stays open, and `git.ignoredRepositories` lists `repoA` and no longer `nestedrepo`. Repeat from `repoA` with the `parentdir` space. Expected: no repository, and the Initialize offer.
+4. No-Git space. Switch herdr to the `parentdir` space.
+   Expected: Source Control shows Git's "Initialize Repository" button, below it "Initialize Repository in Followed Folder", and VS Code's built-in "Publish to GitHub" block. Git's button opens a folder pick that lists the anchor; press Escape. Click the extension's button.
+   Expected: `parentdir\.git` exists, the anchor has no `.git`, and Source Control lists `parentdir` as the only repository. Delete `parentdir\.git` afterwards.
+5. Terminal `git init`. Switch away and back to the `parentdir` space so that no repository shows, then run `git init` in that space's own pane.
+   Expected: with no switch and no reload, `parentdir` shows as the only repository about 1.5 seconds later (1316 to 1407 ms in the scripted run). Delete `parentdir\.git`, switch away and back, then run `mkdir .git`, wait 2 seconds and run `git init`, as a slow init would. Expected: the same, timed from the `git init`; `scm: C:\Users\me\Projects\parentdir gained a .git but Git opened no repository there` may show first. Delete `parentdir\.git` afterwards.
+6. Opened by hand. Follow `repoA` and run "Git: Open Repository" on `nestedrepo`.
+   Expected: it appears, the log has `scm: dropping C:\Users\me\Projects\parentdir\nestedrepo`, Source Control ends with only `repoA`, and `git.ignoredRepositories` lists `nestedrepo`. Run the command on `nestedrepo` again. Expected: nothing opens and no message shows.
+7. Followed worktree. Add the linked worktree `C:\Users\me\Projects\repoA\.worktrees\x` and a herdr space in it, follow that space, and run "Git: Open Repository" on `repoA`.
+   Expected: the log has `scm: dropping C:\Users\me\Projects\repoA`, and Source Control ends with only the worktree.
+8. Followed subfolder. Follow `repoA`, which takes it off the list, turn `herdrNavigator.followGitRoot` off, and focus a space in `C:\Users\me\Projects\repoA\sub`.
+   Expected: the Explorer follows `sub`, Source Control lists `repoA` as the only repository, and the log has no new `scm:` line. Turn the setting back on.
+9. A followed repository's own detection settings. Create `C:\Users\me\Projects\repoDetect` with a submodule and a linked worktree, and a `.vscode/settings.json` holding `"git.detectSubmodules": true`, `"git.detectWorktrees": true` and `"git.openRepositoryInParentFolders": "always"`. Follow it and wait 15 seconds.
+   Expected: Source Control ends with only `repoDetect`; the log has `scm: dropping` for what Git re-detected and no `scm: left open` line.
+10. The exception, first a folder added by hand. Create the repository `C:\Users\me\Projects\repoGitEnabled` with a `.vscode/settings.json` holding `"git.enabled": true`. With `repoA` followed, add it through File > Add Folder to Workspace.
+    Expected: `repoGitEnabled` stays showing with `repoA`. The log has one `scm: dropping C:\Users\me\Projects\repoGitEnabled`, then, once, `scm: left open C:\Users\me\Projects\repoGitEnabled: it outlived the git.enabled false, so its own folder's settings keep Git on there`. Switch herdr to another space. Expected: the folder is gone and that space's repository is the only one.
+    Then a stray inside the followed folder, which the scripted run does not cover and which is read from code only. Create the repository `C:\Users\me\Projects\repoGitEnabled\nestedrepo`, follow `repoGitEnabled`, and run "Git: Open Repository" on `nestedrepo`.
+    Expected: both stay showing. The log has one `scm: dropping C:\Users\me\Projects\repoGitEnabled\nestedrepo`, then, once, the same `scm: left open` line for `nestedrepo`. Switch herdr to a space in another folder. Expected: `repoGitEnabled` leaves the window, `nestedrepo` is dropped, and that space's repository is the only one.
+11. Unsaved workspace file. Edit `navigator.code-workspace` in an editor tab without saving, then run "Git: Open Repository" on a repository outside the followed folder that is not on the list yet.
+    Expected: it stays while the edit is unsaved, and the log has `scm: reconcile stopped, a later event retries it: ...` naming unsaved changes. Save the file. Expected: `scm: dropping ...` follows, and only the followed repository remains.
+12. Auto-follow off. Set `herdrNavigator.autoFollow` to false and open a stray by hand as in step 11, then focus another herdr space.
+    Expected: the stray is dropped, and the followed folder stays. Run "Herdr: Follow Focused Pane Now". Expected: the window moves to that space. Turn the setting back on.
+13. Commit text across a drop. Type a commit message in the followed repository's input box, then open a stray by hand as in step 11.
+    Expected: unmeasured, so record what you see. The only measurement set the text through the Git API with the view open: it stayed in the input box of the reopened repository. A closed view is unmeasured too.
+
+The loop guard's `scm: left open <root>: Git keeps reopening it right after each drop`, after four drops of one root within 10 seconds, has not appeared in a live run; a unit test pins it.
+
 ## Diagnosing a follow with the log
 
 1. Install the packaged VSIX (`npm run package`, then `code --install-extension herdr-navigator-0.1.0.vsix`) and reload the window.

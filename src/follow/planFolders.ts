@@ -13,7 +13,7 @@ export type FolderPlan =
   | { kind: "replace"; index: number; add: string[]; name?: string }
   | { kind: "reclaim"; index: number; deleteCount: number; add: string[]; name?: string }
   | { kind: "append"; index: number; add: string[]; name?: string }
-  | { kind: "remove"; index: number };
+  | { kind: "remove"; index: number; deleteCount: number };
 
 export interface PlanInput {
   folders: readonly FolderLike[];
@@ -23,7 +23,7 @@ export interface PlanInput {
   /** The display name the target's slot should show; absent keeps VS Code's default (the basename). */
   targetName?: string;
   isMultiRoot: boolean;
-  /** True only on the first follow of a window whose index 0 is a legacy anchor and where this install has never recorded a tracked slot: folders after it are the old install's, so the target takes index 1 and the rest go. */
+  /** True only on the first follow of a window whose index 0 is a legacy anchor and where this install has never recorded a tracked slot: folders after it are the old install's, so they go even when the target is already in slot 1, and a target equal to that anchor leaves them. */
   adoptedAnchor?: boolean;
   /** Required; selects the path comparison rules (Windows, case-sensitive Linux, case-insensitive macOS). */
   platform: NodeJS.Platform;
@@ -44,11 +44,23 @@ export type WorkspaceFilePlan =
   | { action: "legacy-untitled" }
   | { action: "none" };
 
+/** Written into the navigator workspace file: workspace settings override the user's, and these stop every second repository except folder roots. */
+export const NAVIGATOR_GIT_SETTINGS = {
+  "git.autoRepositoryDetection": false,
+  "git.detectSubmodules": false,
+  "git.detectWorktrees": false,
+  "git.openRepositoryInParentFolders": "always",
+} as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parseObject(text: string | undefined): Record<string, unknown> | null {
   if (text === undefined) return null;
   try {
     const parsed: unknown = JSON.parse(text);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -63,10 +75,20 @@ export function hasAnchorFirst(existing: string, anchorPath: string, platform: N
   return typeof firstPath === "string" && samePath(firstPath, anchorPath, platform);
 }
 
-/** Workspace file JSON; the anchor stays first because changing index 0 restarts the extension host. Every other key of an existing file (settings such as `window.title`) is kept. */
+/** Workspace file JSON; the anchor stays first because changing index 0 restarts the extension host. Every other key of an existing file (settings such as `window.title`) is kept, and a Git setting it already has wins over `NAVIGATOR_GIT_SETTINGS`. */
 export function navigatorWorkspaceContent(anchorPath: string, target: string, platform: NodeJS.Platform, existing?: string): string {
   const paths = samePath(anchorPath, target, platform) ? [anchorPath] : [anchorPath, target];
-  return JSON.stringify({ ...parseObject(existing), folders: paths.map((path) => ({ path })) }, null, 2);
+  const file = parseObject(existing);
+  const settings = file?.settings;
+  return JSON.stringify(
+    {
+      ...file,
+      folders: paths.map((path) => ({ path })),
+      settings: { ...NAVIGATOR_GIT_SETTINGS, ...(isRecord(settings) ? settings : {}) },
+    },
+    null,
+    2,
+  );
 }
 
 /** Decides how a window becomes (or already is) the navigator, which is always a saved workspace file. */
@@ -91,17 +113,22 @@ export function planFolders({ folders, trackedPath, anchorPath, target, targetNa
   // Spread instead of `name: undefined` so an unnamed plan keeps its exact shape.
   const named = targetName === undefined ? {} : { name: targetName };
 
-  // The old install's tracked slot is lost with its workspaceState, so its folders linger after the anchor; this runs once, before anything is recorded.
-  // Reclaiming would re-add index 0; the stale folders stay until a different target arrives.
+  // The old install's tracked slot is lost with its workspaceState, so its folders linger after the anchor until a different target arrives.
   if (adoptedAnchor && samePath(target, anchorPath, platform)) return { kind: "noop", reason: "target is the adopted anchor" };
-  if (adoptedAnchor && folders.length >= 2 && !(folders.length === 2 && samePath(folders[1].path, target, platform))) {
-    return { kind: "reclaim", index: 1, deleteCount: folders.length - 1, add: [target], ...named };
+
+  // A navigator window shows only the target after the anchor; every other folder goes in one call, so Git sees one folder change.
+  if (folders.length >= 2 && samePath(folders[0].path, anchorPath, platform)) {
+    if (samePath(target, anchorPath, platform)) return { kind: "remove", index: 1, deleteCount: folders.length - 1 };
+    const slotHoldsTarget = samePath(folders[1].path, target, platform);
+    // Focus staying in the space already in slot 1 is no switch, so a folder the user added waits for the next one.
+    const inPlace = folders.length === 2 ? slotHoldsTarget || trackedIndex === 1 : slotHoldsTarget && !adoptedAnchor;
+    if (!inPlace) return { kind: "reclaim", index: 1, deleteCount: folders.length - 1, add: [target], ...named };
   }
 
   const alreadyOpenIndex = folders.findIndex(({ path }) => samePath(path, target, platform));
   if (alreadyOpenIndex !== -1 && alreadyOpenIndex !== trackedIndex) {
     if (trackedIndex === -1) return { kind: "noop", reason: "target already open" };
-    return { kind: "remove", index: trackedIndex };
+    return { kind: "remove", index: trackedIndex, deleteCount: 1 };
   }
 
   if (alreadyOpenIndex !== -1) {
@@ -125,5 +152,6 @@ export function planFolders({ folders, trackedPath, anchorPath, target, targetNa
 
   if (trackedIndex !== -1) return { kind: "replace", index: trackedIndex, add: [target], ...named };
 
+  // Slot 1 is empty in a navigator window here; a multi-root window of the user's own keeps its folders.
   return { kind: "append", index: folders.length, add: [target], ...named };
 }

@@ -58,3 +58,23 @@ export function samePath(
   if (platform === "linux") return left === right;
   return left.toLowerCase() === right.toLowerCase();
 }
+
+/**
+ * Whether `child` is `parent` or sits below it, under the same normalization and case rule as `samePath`.
+ */
+export function isSameOrInside(
+  child: string | null | undefined,
+  parent: string | null | undefined,
+  platform: NodeJS.Platform,
+): boolean {
+  const normalizedChild = normalizeCwd(child, platform);
+  const normalizedParent = normalizeCwd(parent, platform);
+  if (normalizedChild === null || normalizedParent === null) return false;
+  const fold = (path: string) => (platform === "linux" ? path : path.toLowerCase());
+  const left = fold(normalizedChild);
+  const right = fold(normalizedParent);
+  if (left === right) return true;
+  const separator = platform === "win32" ? "\\" : "/";
+  // The roots C:\ and / already end in a separator; adding one elsewhere keeps parentdir2 out of parentdir.
+  return left.startsWith(right.endsWith(separator) ? right : right + separator);
+}

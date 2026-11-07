@@ -43,10 +43,19 @@ describe("applyPendingTakeover", () => {
     return { ...s, logs, done: applyPendingTakeover(pending, NOW, MAX, s.effects, "win32", (_level, line) => void logs.push(line)) };
   };
 
-  it("puts a fresh takeover folder in slot 1 once, keeping index 0 and later user folders, and ignores a stale one", async () => {
+  it("moves a fresh takeover folder into slot 1 in one change, removing every other folder after index 0, leaves it where it already holds slot 1, and ignores a stale one", async () => {
     const replaced = run([ANCHOR, PROJECT, "C:\\work\\extra"], fresh);
     assert.equal(await replaced.done, TARGET);
-    assert.deepEqual(replaced.calls, [`update replace 1 1 ${TARGET}`]);
+    assert.deepEqual(replaced.calls, [`update reclaim 1 2 ${TARGET}`]);
+    const later = run([ANCHOR, PROJECT, TARGET], fresh);
+    assert.equal(await later.done, TARGET);
+    assert.deepEqual(later.calls, [`update reclaim 1 2 ${TARGET}`]);
+    const holding = run([ANCHOR, TARGET, PROJECT], fresh);
+    assert.equal(await holding.done, TARGET);
+    assert.deepEqual(holding.calls, []);
+    const inPlace = run([ANCHOR, PROJECT], fresh);
+    await inPlace.done;
+    assert.deepEqual(inPlace.calls, [`update replace 1 1 ${TARGET}`]);
     const appended = run([ANCHOR], fresh);
     await appended.done;
     assert.deepEqual(appended.calls, [`update append 1 0 ${TARGET}`]);

@@ -18,8 +18,8 @@ function fakeItem(): FakeItem {
 
 const themeColor = (id: string): ThemeColor => ({ id }) as ThemeColor;
 
-describe("StatusBar main item", () => {
-  it("shows the auto-follow eye and toggles it while herdr runs, offers launch otherwise, and the install page when herdr is missing", () => {
+describe("StatusBar", () => {
+  it("shows the auto-follow eye and toggles it while herdr runs, offers launch otherwise, the install page when herdr is missing, and keeps the plugin hint directly right of the main item, with no default or integer priority able to land between them", () => {
     const item = fakeItem();
     const bar = new StatusBar(item, themeColor);
     bar.update(true, true, "/proj/app", true);
@@ -41,11 +41,7 @@ describe("StatusBar main item", () => {
     bar.update(false, true, null, false, undefined, false);
     assert.equal(item.text, "$(eye) herdr: not installed");
     assert.equal(item.command, INSTALL_COMMAND);
-  });
-});
 
-describe("StatusBar item priorities", () => {
-  it("place the plugin hint directly right of the main item, with no default or integer priority able to land between them", () => {
     assert.ok(PLUGIN_HINT_PRIORITY < MAIN_ITEM_PRIORITY, "a lower Left priority sits further right");
     assert.ok(MAIN_ITEM_PRIORITY - PLUGIN_HINT_PRIORITY < 1);
     // The smallest integer at or above the hint must already lie above the main item.

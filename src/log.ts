@@ -2,7 +2,7 @@ import type { LogOutputChannel } from "vscode";
 import type { Logger, LogLevel } from "./herdr/types";
 
 /** Message prefixes whose latest line the diagnostics command replays. */
-export const DIAGNOSTIC_TOPICS = ["pane", "target", "plan", "mutation"] as const;
+export const DIAGNOSTIC_TOPICS = ["pane", "target", "plan", "mutation", "scm"] as const;
 
 export interface DiagnosticLog {
   log: Logger;
