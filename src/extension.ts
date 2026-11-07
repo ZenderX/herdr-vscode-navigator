@@ -1,4 +1,4 @@
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
 import * as vscode from "vscode";
@@ -18,6 +18,7 @@ import {
   switchFolder,
 } from "./follow";
 import type { FolderPlan, PendingTarget } from "./follow";
+import { findGitRoot } from "./follow/gitRoot";
 import { HerdrClient, resolvePipeName } from "./herdr";
 import type { Logger, SessionSnapshot } from "./herdr";
 import { HerdrPresence, handleNotInstalledClick, showsNotInstalled } from "./launch/herdrPresence";
@@ -37,6 +38,7 @@ import { withTimeout } from "./hosting";
 import { createPaneBusyCheck, nodePaneBusyDeps } from "./restore/paneBusy";
 import { createReturnService, fileRecordStore } from "./restore/returnService";
 import type { ReturnService } from "./restore/returnService";
+import type { GitDirLook } from "./scm/decision";
 import { resolveAnchor } from "./vscode/anchor";
 import { AutoLaunch, SESSION_KEY, sessionMemento } from "./vscode/autoLaunch";
 import { createConfigQueue } from "./vscode/configQueue";
@@ -50,7 +52,7 @@ import { HostingMonitor, createCommandStartTrigger, detectHosting } from "./vsco
 import { selectAnchor } from "./vscode/anchorPath";
 import type { AnchorChoice } from "./vscode/anchorPath";
 import { createScmGuard } from "./vscode/scmGuard";
-import type { GitExtensionExports } from "./vscode/scmGuard";
+import type { GitExtensionExports, ScmGuard } from "./vscode/scmGuard";
 import { affectsSettings, readSettings, setAutoFollow } from "./vscode/settings";
 import type { Settings } from "./vscode/settings";
 import { LAUNCH_COMMAND, MAIN_ITEM_PRIORITY, PLUGIN_HINT_PRIORITY, StatusBar, TOGGLE_COMMAND } from "./vscode/statusBar";
@@ -78,6 +80,8 @@ const TITLE_WRITE_RETRIES = 3;
 const CONFIG_RETRY_DELAY_MS = 250;
 // The probe measured Git's reopen after a toggle at 81-229 ms; a later reopen still ends in its own open event, so overrunning this bound only ends the wait. It also clears the 500 ms Git's own `.git` path waits before opening.
 const SCM_SETTLE_MS = 1000;
+// The most a switch waits for its repository to open first; real opens ran 121-859 ms, and a slower one finishes after the swap.
+const SCM_OPEN_FIRST_MS = 2000;
 
 const timers = { setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms), clearTimeout: (handle: unknown) => clearTimeout(handle as NodeJS.Timeout) };
 
@@ -100,14 +104,33 @@ async function consumeOwnReload(context: vscode.ExtensionContext, platform: Node
   return suppressed;
 }
 
+const absentAs =
+  <T>(value: T) =>
+  (err: NodeJS.ErrnoException): T => {
+    if (err.code === "ENOENT" || err.code === "ENOTDIR") return value;
+    throw err;
+  };
+
+function pathExists(path: string): Promise<boolean> {
+  return stat(path).then(() => true, absentAs(false));
+}
+
 function hasGitEntry(dir: string): Promise<boolean> {
-  return stat(join(dir, ".git")).then(
-    () => true,
-    (err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT" || err.code === "ENOTDIR") return false;
-      throw err;
-    },
-  );
+  return pathExists(join(dir, ".git"));
+}
+
+// `lstat`, since `git init` makes a real directory, and a link to one could lead to a repository holding real work.
+async function readGitDir(folder: string): Promise<GitDirLook | undefined> {
+  const gitDir = join(folder, ".git");
+  const entry = await lstat(gitDir).catch(absentAs(undefined));
+  if (entry === undefined) return undefined;
+  const [hasHead, heads, hasPackedRefs, hasIndex] = await Promise.all([
+    pathExists(join(gitDir, "HEAD")),
+    readdir(join(gitDir, "refs", "heads")).catch(absentAs<string[]>([])),
+    pathExists(join(gitDir, "packed-refs")),
+    pathExists(join(gitDir, "index")),
+  ]);
+  return { isDirectory: entry.isDirectory(), hasHead, hasHeadRef: heads.length > 0, hasPackedRefs, hasIndex };
 }
 
 // A `.git` directory reads as EISDIR: that is a main checkout, not a linked worktree.
@@ -198,6 +221,20 @@ function onFollowedGitEntry(listener: (folder: vscode.Uri) => void): vscode.Disp
   };
 }
 
+// The bare pattern for the same reason as above. A change of the first folder restarts the extension host, so this watcher is never aimed again.
+function onAnchorGitEntry(listener: () => void): vscode.Disposable {
+  const anchor = vscode.workspace.workspaceFolders?.[0];
+  if (anchor === undefined) return vscode.Disposable.from();
+  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(anchor, ".git"), false, true, true);
+  watcher.onDidCreate(() => listener());
+  return watcher;
+}
+
+/** Filled by `startScmGuard`, which runs after the controller exists; outside a navigator window it stays a no-op. */
+interface ScmSwitchSlot {
+  prepare: ScmGuard["prepareSwitch"];
+}
+
 interface ScmEnv {
   context: vscode.ExtensionContext;
   platform: NodeJS.Platform;
@@ -205,20 +242,21 @@ interface ScmEnv {
   queue: ConfigQueue;
   isNavigatorWindow: () => boolean;
   chosenAnchor: () => AnchorChoice;
+  switchSlot: ScmSwitchSlot;
 }
 
-// Started only in a navigator window, and never awaited: follow must not wait on Git. A change of the first folder restarts the extension host, so the gate holds for this activation.
-function startScmGuard({ context, platform, log, queue, isNavigatorWindow, chosenAnchor }: ScmEnv): vscode.Disposable[] {
+// Started only in a navigator window, and never awaited: follow waits on Git only through the bounded `prepareSwitch`. A change of the first folder restarts the extension host, so the gate holds for this activation.
+function startScmGuard({ context, platform, log, queue, isNavigatorWindow, chosenAnchor, switchSlot }: ScmEnv): vscode.Disposable[] {
   if (!isNavigatorWindow()) return [];
   const guard = createScmGuard({
     platform,
     getExtension: (id) => vscode.extensions.getExtension<GitExtensionExports>(id),
-    config: () => {
-      const gitConfig = vscode.workspace.getConfiguration("git");
+    config: (section) => {
+      const sectionConfig = vscode.workspace.getConfiguration(section);
       return {
-        get: (key) => gitConfig.get<unknown>(key),
-        inspect: (key) => gitConfig.inspect<unknown>(key),
-        update: (key, value) => gitConfig.update(key, value, vscode.ConfigurationTarget.Workspace),
+        get: (key) => sectionConfig.get<unknown>(key),
+        inspect: (key) => sectionConfig.inspect<unknown>(key),
+        update: (key, value) => sectionConfig.update(key, value, vscode.ConfigurationTarget.Workspace),
       };
     },
     queue,
@@ -227,6 +265,10 @@ function startScmGuard({ context, platform, log, queue, isNavigatorWindow, chose
     isNavigator: isNavigatorWindow,
     onDidChangeWorkspaceFolders: (listener) => vscode.workspace.onDidChangeWorkspaceFolders(listener),
     onDidCreateGitEntry: onFollowedGitEntry,
+    onDidCreateAnchorGitEntry: onAnchorGitEntry,
+    readGitDir,
+    removeGitDir: (folder) => rm(join(folder, ".git"), { recursive: true, force: true }),
+    hasGitEntry,
     onDidChangeConfiguration: (listener) => vscode.workspace.onDidChangeConfiguration(listener),
     onDidSaveWorkspaceFile: (listener) =>
       vscode.workspace.onDidSaveTextDocument(({ uri }) => {
@@ -235,23 +277,19 @@ function startScmGuard({ context, platform, log, queue, isNavigatorWindow, chose
     now: () => Date.now(),
     defer: (fn) => void setTimeout(fn, 0),
     settle: () => new Promise((resolve) => setTimeout(resolve, SCM_SETTLE_MS)),
+    openFirstBound: () => new Promise((resolve) => setTimeout(resolve, SCM_OPEN_FIRST_MS)),
+    repositoryRootOf: async (path) => {
+      const root = await findGitRoot(path, { hasGitEntry, platform });
+      return (await hasGitEntry(root)) ? vscode.Uri.file(root) : undefined;
+    },
     realpath,
-    setContext: (key, value) => void vscode.commands.executeCommand("setContext", key, value),
-    showErrorMessage: (message) => void vscode.window.showErrorMessage(message),
     log,
-  });
-  const initCommand = vscode.commands.registerCommand("herdrNavigator.initRepository", async () => {
-    const followed = vscode.workspace.workspaceFolders?.[1];
-    if (followed === undefined || !isNavigatorWindow()) {
-      void vscode.window.showErrorMessage("Herdr Navigator: no followed folder to initialize.");
-      return;
-    }
-    await guard.initRepository(followed.uri);
   });
   const anchor = chosenAnchor();
   if (anchor.adopted) ensureAdoptedAnchorGitOff(anchor.path).catch((err: unknown) => log("warn", `scm: adopted anchor settings: ${errorText(err)}`));
+  switchSlot.prepare = guard.prepareSwitch;
   void guard.activate();
-  return [guard, initCommand];
+  return [guard];
 }
 
 function applySettings(controller: FollowController, settings: Settings): void {
@@ -398,6 +436,7 @@ interface ControllerEnv {
   onSnapshot: (snapshot: SessionSnapshot) => void;
   liveProbe: LiveCwdProbe;
   probePlatform: NodeJS.Platform;
+  scmSwitchSlot: ScmSwitchSlot;
 }
 
 function createController(env: ControllerEnv): FollowController {
@@ -452,7 +491,8 @@ function createController(env: ControllerEnv): FollowController {
       }
       const applied = await applyFolderPlan(
         plan,
-        workspaceEffects(log),
+        // The slot is read at call time: the guard fills it after the controller exists.
+        { ...workspaceEffects(log), prepareSwitch: (target) => env.scmSwitchSlot.prepare(target, isCurrent) },
         {
           hostsHerdr: () => env.host.get() !== "no",
           beginHostingConversion: (folder) => env.autoLaunch.beginHostingConversion(folder),
@@ -604,6 +644,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   const windowFolder = (): string | undefined => getFolders()[isNavigatorWindow() ? 1 : 0]?.path;
   const configQueue = createConfigQueue({ delay: () => new Promise((resolve) => setTimeout(resolve, CONFIG_RETRY_DELAY_MS)) });
+  const scmSwitchSlot: ScmSwitchSlot = { prepare: () => Promise.resolve() };
   const refreshWindowTitle = createTitleRefresher(context, platform, log, configQueue, isNavigatorWindow);
   const socketName = (): string => resolvePipeName(settings.socketPath, process.env, platform);
   // A fresh client per call: the socket path setting can change at runtime.
@@ -709,6 +750,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshAnchor: async () => void (anchorPath = await resolveAnchor(context)),
     chosenAnchor,
     refreshStatus: (slot) => refreshStatus(slot),
+    scmSwitchSlot,
     onSnapshot: (snapshot) => {
       poller.observe(snapshot);
       returnService.observeSnapshot(snapshot);
@@ -801,7 +843,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     { dispose: () => pluginHint.dispose() },
     hintItem,
     ...registerCommands({ output, diagnostics, controller, consent, connection, autoLaunch, requestHosting, refreshStatus, presence, pluginHint, host }),
-    ...startScmGuard({ context, platform, log, queue: configQueue, isNavigatorWindow, chosenAnchor }),
+    ...startScmGuard({ context, platform, log, queue: configQueue, isNavigatorWindow, chosenAnchor, switchSlot: scmSwitchSlot }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       refreshStatus();
       refreshWindowTitle();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { decideScm, guardToggles, initOffer } from "../../../scm/decision";
-import type { LoopGuardDecision, ScmDecision, ToggleAttempt } from "../../../scm/decision";
+import { decideAnchorGit, decideScm, guardToggles, initialBranch } from "../../../scm/decision";
+import type { GitDirLook, LoopGuardDecision, ScmDecision, ToggleAttempt } from "../../../scm/decision";
 
 const ANCHOR = "C:\\Users\\me\\AppData\\anchor";
 const PROJECTS = "C:\\Users\\me\\Projects";
@@ -14,8 +14,8 @@ const decide = (roots: string[], folders: string[] = FOLDERS, platform: NodeJS.P
 const guard = (strays: string[], history: ToggleAttempt[], survived: string[], at: number, platform: NodeJS.Platform = "win32"): LoopGuardDecision =>
   guardToggles({ strays, history, survived, now: () => at, platform });
 
-describe("decideScm, guardToggles and initOffer", () => {
-  it("keeps exactly the selected space's repository with no left-open outcome, holds a stray only while a toggle cannot work, and offers Initialize only for a followed folder", () => {
+describe("decideScm, guardToggles and decideAnchorGit", () => {
+  it("keeps exactly the selected space's repository with no left-open outcome, holds a stray only while a toggle cannot work, and removes only an anchor .git that never held work", () => {
     // The followed folder's own repository, or one above it, is what the user selected; a case or separator difference is still that repository.
     assert.deepEqual(decide([]), { owned: null, strays: [] });
     assert.deepEqual(decide([PARENT]), { owned: PARENT, strays: [] });
@@ -51,6 +51,10 @@ describe("decideScm, guardToggles and initOffer", () => {
     // A sibling sharing the followed folder's name as a prefix is not owned by it.
     assert.deepEqual(decide([`${PARENT}2`]), { owned: null, strays: [`${PARENT}2`] });
 
+    // A repository opened ahead of its folder swap is the next selected one, in any spelling, and the root still followed stays owned until that swap; every other root still goes.
+    assert.deepEqual(decideScm({ folders: FOLDERS, roots: [PARENT, OUTSIDE, NESTED], incoming: OUTSIDE.toUpperCase(), platform: "win32" }), { owned: PARENT, strays: [NESTED] });
+    assert.deepEqual(decideScm({ folders: FOLDERS, roots: [OUTSIDE], incoming: `${OUTSIDE}2`, platform: "win32" }), { owned: null, strays: [OUTSIDE] });
+
     // With no followed folder nothing is selected, so every root goes.
     assert.deepEqual(decide([OUTSIDE, ANCHOR], [ANCHOR]), { owned: null, strays: [OUTSIDE, ANCHOR] });
     assert.deepEqual(decide([OUTSIDE], []), { owned: null, strays: [OUTSIDE] });
@@ -85,9 +89,25 @@ describe("decideScm, guardToggles and initOffer", () => {
     const posixBurst = [0, 1, 2, 3].map((at) => ({ root: "/home/me/nestedrepo", at }));
     assert.deepEqual(guard(["/home/me/NESTEDREPO"], posixBurst, ["/home/me/nestedrepo"], 4, "linux"), { toggle: ["/home/me/NESTEDREPO"], hold: [] });
 
-    assert.equal(initOffer(FOLDERS, true), true);
-    assert.equal(initOffer(FOLDERS, false), false);
-    assert.equal(initOffer([ANCHOR], true), false);
-    assert.equal(initOffer([], true), false);
+    // A fresh anchor `.git` hands the pick to the followed folder: `init` when it has no `.git` of its own, and only an open when it has one, so an existing repository is never initialised over.
+    const FRESH: GitDirLook = { isDirectory: true, hasHead: true, hasHeadRef: false, hasPackedRefs: false, hasIndex: false };
+    assert.equal(decideAnchorGit({ look: FRESH, followedHasGit: false }), "remove-and-init");
+    assert.equal(decideAnchorGit({ look: FRESH, followedHasGit: true }), "remove-and-open");
+    // With no followed folder, or at activation where no pick is in hand, nothing but the removal follows.
+    assert.equal(decideAnchorGit({ look: FRESH }), "remove");
+
+    // Any sign of work, a linked worktree's `.git` file, or a `.git` that is not a repository at all must survive, whichever way the followed folder looks: the removal cannot be undone.
+    const notFresh: GitDirLook[] = [{ ...FRESH, hasHeadRef: true }, { ...FRESH, hasPackedRefs: true }, { ...FRESH, hasIndex: true }, { ...FRESH, hasHead: false }, { ...FRESH, isDirectory: false }];
+    for (const look of notFresh) {
+      for (const followedHasGit of [undefined, false, true]) assert.equal(decideAnchorGit({ look, followedHasGit }), "leave", JSON.stringify(look));
+    }
+
+    // The redirect must start the branch Git's own command would, or the two picks of one button differ; a raw `my branch` would fail `git init -b` after the anchor's `.git` has gone.
+    assert.equal(initialBranch("trunk", "-"), "trunk");
+    assert.equal(initialBranch(" --my branch ", "_"), "my_branch");
+    assert.equal(initialBranch("my branch", undefined), "my-branch");
+    // Empty leaves the choice to `git init`, as Git's command does with an empty setting.
+    assert.equal(initialBranch("", "-"), "");
+    assert.equal(initialBranch(undefined, "-"), "");
   });
 });

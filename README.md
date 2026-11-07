@@ -50,9 +50,11 @@ herdr 0.9.5 restores each pane in the folder it was spawned in, not the one its 
 
 In `workspace` mode Source Control keeps the selected space's repository, the longest open one that equals or contains the followed folder, and drops every other one each time it opens, including one you open by hand. The editor tab of a dropped repository stays. The navigator workspace file holds the Git settings and the `git.ignoredRepositories` list this uses, and they override yours in that window only; following a space takes its repository off the list. With `herdrNavigator.followGitRoot` off, the exact folder is followed and its parent repository shows.
 
+A switch opens the new repository first and swaps the folder after, so the Changes view goes straight from the old repository to the new one. Explorer and the window title therefore change later, by the time the repository takes to open and by 2 seconds at most; a space without Git swaps with no wait. If you enable the Repositories pane, hidden by default, it shows both repositories for under 100 ms as measured.
+
 One exception stays: any repository under a folder whose own `.vscode/settings.json` sets `git.enabled: true`, whether a folder you add by hand or a repository nested in the followed folder. That folder setting outranks the workspace setting, so VS Code never closes it. It goes at the next switch to another folder, which takes that folder out of the window, and the log has `scm: left open`.
 
-A space without Git shows VS Code's built-in "Publish to GitHub" block and two Initialize buttons: Git's own, whose folder pick also lists the extension's empty folder, and below it "Initialize Repository in Followed Folder", which initializes the followed folder in one click. A `git init` in the space's terminal shows the new repository within about two seconds, with no switch.
+A space without Git shows VS Code's built-in "Publish to GitHub" block and Git's own Initialize Repository button. Its folder pick also lists the extension's empty folder, first and selected. Either pick attaches the followed folder's repository with no reload: a fresh `.git` the empty folder's pick creates is removed and the followed folder is initialized instead, which takes about a second longer. A `git init` in the space's terminal shows the new repository within about two seconds, with no switch.
 
 `followMode: folder` is a plain folder window, so none of this applies there.
 
@@ -70,7 +72,6 @@ The plugin also puts each restored pane back in the folder it was last in, worki
 | `herdrNavigator.toggleAutoFollow` | Herdr: Toggle Auto-Follow | none |
 | `herdrNavigator.launchHerdr` | Herdr: Launch Herdr | none |
 | `herdrNavigator.reconnect` | Herdr: Reconnect | none |
-| `herdrNavigator.initRepository` | Initialize Repository in Followed Folder | none |
 | `herdrNavigator.showDiagnostics` | Herdr Navigator: Show Diagnostics | none |
 
 The key binding is a chord because VS Code handles chords even while the herdr terminal has focus. A single key would go to the shell.

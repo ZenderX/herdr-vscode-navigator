@@ -126,11 +126,14 @@ describe("FollowController", () => {
     h.controller.onFocusEvent();
     h.clock.advance(100);
     await tick();
+    // The guard reads this before Git's open: a newer focus during the apply must turn it false.
+    assert.equal(h.currents[0](), true);
     for (const next of ["C:\\a", "C:\\b", "C:\\c"]) {
       h.cwd.value = next;
       h.controller.onFocusEvent();
       h.clock.advance(100);
     }
+    assert.equal(h.currents[0](), false);
     h.gate.hold = false;
     h.gate.release?.();
     await h.controller.whenIdle();

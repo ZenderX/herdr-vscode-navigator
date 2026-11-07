@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { NAVIGATOR_GIT_SETTINGS } from "../../../follow/planFolders";
+import { NAVIGATOR_WORKSPACE_SETTINGS } from "../../../follow/planFolders";
+import type { GitDirLook } from "../../../scm/decision";
 import { createConfigQueue } from "../../../vscode/configQueue";
 import { createScmGuard } from "../../../vscode/scmGuard";
 import type { GitApi, GitDisposable, GitEvent, GitExtensionExports, GitRepository, GitUri, ScmGuardDeps } from "../../../vscode/scmGuard";
@@ -40,35 +41,51 @@ interface Options {
   extension?: "missing" | "disabled" | "throws" | "live";
   realpath?: ScmGuardDeps["realpath"];
   updateFails?: (key: string, value: unknown) => boolean;
-  init?: () => Promise<GitRepository | null>;
   open?: () => Promise<GitRepository | null>;
-  defaultBranch?: string;
   holdSettle?: boolean;
+  /** The target's repository root; the target itself by default, as `followGitRoot` leaves most targets. */
+  rootOf?: ScmGuardDeps["repositoryRootOf"];
+  /** The anchor's `.git`, none by default. */
+  anchorGit?: GitDirLook;
+  followedHasGit?: boolean;
+  init?: () => Promise<GitRepository | null>;
+  /** How many removals fail before one works. */
+  removeFailures?: number;
 }
 
-/** The four settings as `inspect` sees them, so a setup with no override has nothing left to ensure. */
-const NAVIGATOR_GIT_SETTINGS_BY_KEY = Object.fromEntries(Object.entries(NAVIGATOR_GIT_SETTINGS).map(([key, value]) => [key.slice("git.".length), value]));
+/** Git's keys are stored bare, as most assertions read them; any other section stays in the key, so a write under the wrong section shows. */
+const storedKey = (section: string, key: string): string => (section === "git" ? key : `${section}.${key}`);
+
+/** The settings as `inspect` sees them, so a setup with no override has nothing left to ensure. */
+const NAVIGATOR_SETTINGS_BY_KEY = Object.fromEntries(Object.entries(NAVIGATOR_WORKSPACE_SETTINGS).map(([key, value]) => [key.replace(/^git\./, ""), value]));
 
 function setup(options: Options = {}) {
-  const settings: Record<string, unknown> = { ...NAVIGATOR_GIT_SETTINGS_BY_KEY, ...options.settings };
+  const settings: Record<string, unknown> = { ...NAVIGATOR_SETTINGS_BY_KEY, ...options.settings };
   const roots = { list: options.roots ?? [] };
   const opened = emitter<GitRepository>();
   const stateChange = emitter<GitApi["state"]>();
   const enablement = emitter<boolean>();
   const folderChange = emitter<void>();
   const gitEntry = emitter<GitUri>();
+  const anchorEntry = emitter<void>();
   const configChange = emitter<void>();
   const saved = emitter<void>();
   const clock = { now: 0 };
   const deferred: Array<() => void> = [];
   const settles: Array<() => void> = [];
+  const bounds: Array<() => void> = [];
   const events: string[] = [];
   const logs: string[] = [];
-  const errors: string[] = [];
-  const contexts: Array<[string, boolean]> = [];
-  const inits: Array<[string, unknown]> = [];
   const openCalls: string[] = [];
-  const state = { record: options.record as unknown, folders: [ANCHOR, ...(options.followed ?? [])], gitState: options.state ?? "initialized", navigator: options.navigator ?? true };
+  const inits: unknown[] = [];
+  const state = {
+    record: options.record as unknown,
+    folders: [ANCHOR, ...(options.followed ?? [])],
+    gitState: options.state ?? "initialized",
+    navigator: options.navigator ?? true,
+    anchorGit: options.anchorGit,
+    removeFailures: options.removeFailures ?? 0,
+  };
 
   const api: GitApi = {
     get state() {
@@ -79,15 +96,15 @@ function setup(options: Options = {}) {
       return roots.list.map(repo);
     },
     onDidOpenRepository: opened.event,
-    init: async (root, initOptions) => {
-      inits.push([root.fsPath, initOptions]);
-      events.push("init");
-      return options.init ? options.init() : repo(root.fsPath);
-    },
     openRepository: async (root) => {
       openCalls.push(root.fsPath);
       events.push("open");
       return options.open ? options.open() : repo(root.fsPath);
+    },
+    init: async (root, initOptions) => {
+      events.push(`init ${root.fsPath}`);
+      inits.push(initOptions);
+      return options.init ? options.init() : repo(root.fsPath);
     },
   };
   // As measured: the false disposes every root its own folder does not keep on, and any later configuration change reopens the folder roots not listed.
@@ -110,14 +127,15 @@ function setup(options: Options = {}) {
   const deps: ScmGuardDeps = {
     platform: "win32",
     getExtension: () => (options.extension === "missing" ? undefined : { activate: async () => extension }),
-    config: () => ({
-      get: (key) => (key === "defaultBranchName" ? options.defaultBranch : undefined),
-      inspect: (key) => ({ workspaceValue: settings[key], globalValue: options.globals?.[key] }),
+    config: (section) => ({
+      get: (key) => settings[storedKey(section, key)] ?? options.globals?.[storedKey(section, key)],
+      inspect: (key) => ({ workspaceValue: settings[storedKey(section, key)], globalValue: options.globals?.[storedKey(section, key)] }),
       update: async (key, value) => {
-        if (options.updateFails?.(key, value)) throw new Error("file is dirty");
-        events.push(`update ${key}=${String(value)}`);
-        settings[key] = value;
-        applyToGit(key, value);
+        const stored = storedKey(section, key);
+        if (options.updateFails?.(stored, value)) throw new Error("file is dirty");
+        events.push(`update ${stored}=${String(value)}`);
+        settings[stored] = value;
+        applyToGit(stored, value);
       },
     }),
     queue: createConfigQueue({ delay: async () => undefined }),
@@ -132,14 +150,25 @@ function setup(options: Options = {}) {
     isNavigator: () => state.navigator,
     onDidChangeWorkspaceFolders: (listener) => folderChange.event(listener),
     onDidCreateGitEntry: gitEntry.event,
+    onDidCreateAnchorGitEntry: (listener) => anchorEntry.event(listener),
+    readGitDir: async () => state.anchorGit,
+    removeGitDir: async (folder) => {
+      if (state.removeFailures > 0) {
+        state.removeFailures--;
+        throw new Error("EBUSY");
+      }
+      events.push(`remove ${folder}`);
+      state.anchorGit = undefined;
+    },
+    hasGitEntry: async () => options.followedHasGit ?? false,
     onDidChangeConfiguration: (listener) => configChange.event(listener),
     onDidSaveWorkspaceFile: (listener) => saved.event(listener),
     now: () => clock.now,
     defer: (fn) => void deferred.push(fn),
     settle: () => (options.holdSettle ? new Promise((resolve) => settles.push(resolve)) : Promise.resolve()),
+    openFirstBound: () => new Promise((resolve) => bounds.push(resolve)),
+    repositoryRootOf: options.rootOf ?? (async (path) => uri(path)),
     realpath: options.realpath ?? (async (path) => path),
-    setContext: (key, value) => void contexts.push([key, value]),
-    showErrorMessage: (message) => void errors.push(message),
     log: (_level, message) => void logs.push(message),
   };
 
@@ -149,7 +178,7 @@ function setup(options: Options = {}) {
   const runSettles = (): void => {
     for (const resolve of settles.splice(0)) resolve();
   };
-  return { guard: createScmGuard(deps), roots, opened, stateChange, enablement, folderChange, gitEntry, configChange, saved, clock, deferred, runDeferred, settles, runSettles, events, logs, errors, contexts, inits, openCalls, state, settings };
+  return { guard: createScmGuard(deps), roots, opened, stateChange, enablement, folderChange, gitEntry, anchorEntry, configChange, saved, clock, deferred, runDeferred, settles, runSettles, bounds, events, logs, openCalls, inits, state, settings };
 }
 
 const FULL_TOGGLE = ["record in-flight", "update enabled=false", "update enabled=undefined", "record undefined"];
@@ -157,7 +186,7 @@ const listed = (...entries: string[]): string => `update ignoredRepositories=${e
 const UNLISTED = "update ignoredRepositories=undefined";
 
 describe("createScmGuard", () => {
-  it("drops every repository but the followed space's, never loops or strands Git disabled, stays a logged no-op when Git is unavailable, and initializes only the folder it is given", async () => {
+  it("drops every repository but the followed space's, never loops or strands Git disabled, stays a logged no-op when Git is unavailable, opens only the followed folder's new repository, opens the next space's repository first within a bound, and hands a misplaced Initialize pick on to the followed folder", async () => {
     // No Git to work with: follow goes on, nothing is written, and each cause says why once.
     for (const extension of ["missing", "throws"] as const) {
       const unavailable = setup({ extension, followed: [REPO_A], settings: { autoRepositoryDetection: undefined } });
@@ -174,22 +203,20 @@ describe("createScmGuard", () => {
     late.enablement.fire(true);
     await flush();
     assert.deepEqual(late.events, ["update detectSubmodules=false"]);
-    assert.deepEqual(late.contexts.at(-1), ["herdrNavigator.initOffer", true]);
 
-    // Settings: only what differs is written, keyed without the section; a reject costs one log line and no follow failure.
-    const fresh = setup({ followed: [REPO_A], settings: { autoRepositoryDetection: true, openRepositoryInParentFolders: undefined } });
+    // Settings: only what differs is written, each through its own section, so an existing workspace file gains the single selection Changes relies on; a reject costs one log line and no follow failure.
+    const fresh = setup({ followed: [REPO_A], settings: { autoRepositoryDetection: true, openRepositoryInParentFolders: undefined, "scm.repositories.selectionMode": undefined } });
     await fresh.guard.activate();
-    assert.deepEqual(fresh.events, ["update autoRepositoryDetection=false", "update openRepositoryInParentFolders=always"]);
+    assert.deepEqual(fresh.events, ["update autoRepositoryDetection=false", "update openRepositoryInParentFolders=always", "update scm.repositories.selectionMode=single"]);
     const rejected = setup({ followed: [REPO_A], settings: { detectWorktrees: undefined }, updateFails: () => true });
     await rejected.guard.activate();
     assert.deepEqual(rejected.events, []);
     assert.equal(rejected.logs.length, 1);
 
-    // A plain window is none of this module's business: no settings, no toggle, no offer.
+    // A plain window is none of this module's business: no settings, no toggle.
     const plain = setup({ navigator: false, followed: [REPO_A], roots: [REPO_B], settings: { detectSubmodules: undefined } });
     await plain.guard.activate();
     assert.deepEqual(plain.events, []);
-    assert.deepEqual(plain.contexts.at(-1), ["herdrNavigator.initOffer", false]);
 
     // Switching away from repoA with an editor open keeps its root listed: dropped one macrotask later, record around both writes.
     const retained = setup({ followed: [REPO_A], roots: [REPO_A], holdSettle: true });
@@ -502,44 +529,6 @@ describe("createScmGuard", () => {
       assert.equal(noModel.saved.count(), 0, fire);
     }
 
-    // The offer follows the folder set, and an anchor-only window has nothing to initialize.
-    const offer = setup();
-    await offer.guard.activate();
-    assert.deepEqual(offer.contexts, [["herdrNavigator.initOffer", false]]);
-    offer.state.folders = [ANCHOR, PARENT];
-    offer.folderChange.fire();
-    assert.deepEqual(offer.contexts.at(-1), ["herdrNavigator.initOffer", true]);
-
-    // Initialize: the user's default branch, then an explicit open when Git returned nothing or an enclosing root.
-    const init = setup({ followed: [PARENT], defaultBranch: "trunk" });
-    await init.guard.activate();
-    await init.guard.initRepository(uri(PARENT));
-    assert.deepEqual(init.inits, [[PARENT, { defaultBranch: "trunk" }]]);
-    assert.deepEqual(init.openCalls, []);
-    for (const result of [null, repo(REPO_A)]) {
-      const differs = setup({ followed: [PARENT], init: async () => result });
-      await differs.guard.activate();
-      await differs.guard.initRepository(uri(PARENT));
-      assert.deepEqual(differs.inits, [[PARENT, undefined]]);
-      assert.deepEqual(differs.openCalls, [PARENT]);
-    }
-    const initFails = setup({ followed: [PARENT], init: async () => Promise.reject(new Error("not a directory")) });
-    await initFails.guard.activate();
-    await initFails.guard.initRepository(uri(PARENT));
-    assert.ok(initFails.errors[0]?.includes("not a directory"));
-    const noGit = setup({ extension: "missing" });
-    await noGit.guard.activate();
-    await noGit.guard.initRepository(uri(PARENT));
-    assert.equal(noGit.errors.length, 1);
-    assert.deepEqual(noGit.inits, []);
-
-    // A followed folder's entry would make the new repository's open do nothing, silently, so the entry goes first; this also catches one the list write missed.
-    const initListed = setup({ followed: [PARENT], state: "uninitialized", settings: { ignoredRepositories: [PARENT] } });
-    await initListed.guard.activate();
-    assert.deepEqual(initListed.events, []);
-    await initListed.guard.initRepository(uri(PARENT));
-    assert.deepEqual(initListed.events, [UNLISTED, "init"]);
-
     // Detection is off, so only this event shows a repository the followed folder gains; opening before `git init` has filled `.git` would find none.
     const gained = setup({ followed: [PARENT], holdSettle: true });
     await gained.guard.activate();
@@ -608,9 +597,239 @@ describe("createScmGuard", () => {
     await flush();
     assert.ok(openFails.logs.some((line) => line.includes("spawn failed")));
 
+    // Open first: the target's entry goes before the open, as a listed root opens nothing, while another space's entry stays; the open event of the target is not a stray's, so the old repository stays with it and nothing toggles.
+    const incoming = setup({ followed: [REPO_A], roots: [REPO_A], settings: { ignoredRepositories: [REPO_B, NESTED] } });
+    await incoming.guard.activate();
+    await incoming.guard.prepareSwitch(REPO_B, () => true);
+    const openedFirst = [listed(NESTED), "open"];
+    assert.deepEqual(incoming.events, openedFirst);
+    incoming.roots.list = [REPO_A, REPO_B];
+    incoming.opened.fire(repo(REPO_B));
+    await flush();
+    assert.deepEqual(incoming.events, openedFirst);
+    // The swap removes the old repository with no drop, and ends the mark: the same root back as a stray in the next space is dropped.
+    incoming.state.folders = [ANCHOR, REPO_B];
+    incoming.roots.list = [REPO_B];
+    incoming.folderChange.fire();
+    incoming.runDeferred();
+    await flush();
+    assert.deepEqual(incoming.events, openedFirst);
+    incoming.state.folders = [ANCHOR, REPO_A];
+    incoming.roots.list = [REPO_A, REPO_B];
+    incoming.folderChange.fire();
+    incoming.runDeferred();
+    await flush();
+    assert.deepEqual(incoming.events, [...openedFirst, listed(NESTED, REPO_B), ...FULL_TOGGLE]);
+
+    // A subfolder target opens its repository's root, and a root Git spells through a junction is still the incoming one.
+    const LINKED = "C:\\Users\\me\\linked";
+    const throughLink = setup({ followed: [REPO_A], roots: [REPO_A], rootOf: async () => uri(LINKED), realpath: async (path) => (path === LINKED ? REPO_B : path) });
+    await throughLink.guard.activate();
+    await throughLink.guard.prepareSwitch(`${LINKED}\\sub`, () => true);
+    assert.deepEqual(throughLink.openCalls, [LINKED]);
+    throughLink.roots.list = [REPO_A, REPO_B];
+    throughLink.opened.fire(repo(REPO_B));
+    await flush();
+    assert.deepEqual(throughLink.events, ["open"]);
+
+    // No `.git` at or above the target means no wait: nothing opens and no bound starts. The same goes for a target already superseded, a plain window, and Git not there yet.
+    const noGitTarget = setup({ followed: [REPO_A], roots: [REPO_A], rootOf: async () => undefined });
+    await noGitTarget.guard.activate();
+    await noGitTarget.guard.prepareSwitch(PARENT, () => true);
+    const superseded = setup({ followed: [REPO_A], roots: [REPO_A], settings: { ignoredRepositories: [REPO_B] } });
+    await superseded.guard.activate();
+    await superseded.guard.prepareSwitch(REPO_B, () => false);
+    const plainSwitch = setup({ navigator: false, followed: [REPO_A] });
+    await plainSwitch.guard.activate();
+    await plainSwitch.guard.prepareSwitch(REPO_B, () => true);
+    const noGitYet = setup({ extension: "disabled", followed: [REPO_A] });
+    await noGitYet.guard.activate();
+    await noGitYet.guard.prepareSwitch(REPO_B, () => true);
+    for (const idle of [noGitTarget, superseded, plainSwitch, noGitYet]) {
+      assert.deepEqual(idle.openCalls, []);
+      assert.deepEqual(idle.bounds, []);
+    }
+    assert.deepEqual(superseded.events, [], "a superseded target's entry stays");
+
+    // A repository slower than the bound stops holding the switch up the moment the bound runs out, and says so; its late open event in the swapped space is the followed root.
+    const slow = setup({ followed: [REPO_A], roots: [REPO_A], open: () => new Promise(() => undefined) });
+    await slow.guard.activate();
+    let slowDone = false;
+    void slow.guard.prepareSwitch(REPO_B, () => true).then(() => (slowDone = true));
+    await flush();
+    assert.deepEqual(slow.openCalls, [REPO_B]);
+    assert.equal(slowDone, false, "the wait lasts while the open runs");
+    slow.bounds[0]?.();
+    await flush();
+    assert.equal(slowDone, true);
+    assert.ok(slow.logs.includes(`scm: ${REPO_B} is still opening past the bound, the switch goes on`));
+    slow.state.folders = [ANCHOR, REPO_B];
+    slow.roots.list = [REPO_B];
+    slow.folderChange.fire();
+    slow.runDeferred();
+    await flush();
+    slow.opened.fire(repo(REPO_B));
+    await flush();
+    assert.deepEqual(slow.events, ["open"]);
+
+    // A failed open never fails the switch: each cause is said once, and the swap's own open is left to Git.
+    const failedOpens: Array<[Options["open"], string]> = [
+      [async () => null, `scm: Git opened no repository at ${REPO_B} ahead of the switch`],
+      [async () => Promise.reject(new Error("spawn failed")), `scm: could not open ${REPO_B} ahead of the switch: spawn failed`],
+    ];
+    for (const [open, line] of failedOpens) {
+      const failed = setup({ followed: [REPO_A], roots: [REPO_A], open });
+      await failed.guard.activate();
+      await failed.guard.prepareSwitch(REPO_B, () => true);
+      assert.deepEqual(failed.logs, [line]);
+    }
+    const rootLookupFails = setup({ followed: [REPO_A], roots: [REPO_A], rootOf: async () => Promise.reject(new Error("EACCES")) });
+    await rootLookupFails.guard.activate();
+    await rootLookupFails.guard.prepareSwitch(REPO_B, () => true);
+    assert.deepEqual(rootLookupFails.logs, ["scm: could not open the next space's repository first: EACCES"]);
+
+    // A rejected lift leaves a listed root that would open nothing, so no open runs; the switch still goes on.
+    const liftRefused = setup({ followed: [REPO_A], roots: [REPO_A], settings: { ignoredRepositories: [REPO_B] }, updateFails: (key) => key === "ignoredRepositories" });
+    await liftRefused.guard.activate();
+    await liftRefused.guard.prepareSwitch(REPO_B, () => true);
+    assert.deepEqual(liftRefused.openCalls, []);
+    assert.ok(liftRefused.logs.some((line) => line.includes("file is dirty")));
+
+    // A swap that outran the lift leaves the open to Git, as this one could land on a space already left.
+    let swapping = true;
+    const outrun = setup({
+      followed: [REPO_A],
+      roots: [REPO_A],
+      settings: { ignoredRepositories: [REPO_B] },
+      updateFails: (key) => {
+        if (swapping && key === "ignoredRepositories") {
+          swapping = false;
+          outrun.state.folders = [ANCHOR, REPO_B];
+          outrun.folderChange.fire();
+        }
+        return false;
+      },
+    });
+    await outrun.guard.activate();
+    await outrun.guard.prepareSwitch(REPO_B, () => true);
+    assert.deepEqual(outrun.openCalls, []);
+
+    // Enter on Git's pick lands in the anchor, where Git never opens it: the removal comes before the `init`, once `git init` has had the wait after its last event, so either pick attaches the followed folder, on the branch Git's own command would start from the user's settings.
+    const FRESH: GitDirLook = { isDirectory: true, hasHead: true, hasHeadRef: false, hasPackedRefs: false, hasIndex: false };
+    const picked = setup({ followed: [PARENT], holdSettle: true, globals: { defaultBranchName: "my branch", branchWhitespaceChar: "_" } });
+    await picked.guard.activate();
+    picked.state.anchorGit = FRESH;
+    picked.anchorEntry.fire();
+    picked.anchorEntry.fire();
+    await flush();
+    picked.settles[0]?.();
+    await flush();
+    assert.deepEqual(picked.events, [], "an earlier event's wait does not end the debounce");
+    picked.settles[1]?.();
+    await flush();
+    const redirected = [`remove ${ANCHOR}`, `init ${PARENT}`];
+    assert.deepEqual(picked.events, redirected);
+    assert.deepEqual(picked.inits, [{ defaultBranch: "my_branch" }]);
+    assert.ok(picked.logs.some((line) => line.includes("removed the fresh .git")));
+
+    // A `.git` holding any work is the user's: it stays, nothing is initialised, and the log says why.
+    for (const look of [{ ...FRESH, hasHeadRef: true }, { ...FRESH, hasPackedRefs: true }]) {
+      const worked = setup({ followed: [PARENT] });
+      await worked.guard.activate();
+      worked.state.anchorGit = look;
+      worked.anchorEntry.fire();
+      await flush();
+      assert.deepEqual(worked.events, []);
+      assert.ok(worked.logs.some((line) => line.includes("alone")));
+    }
+
+    // At activation no pick is in hand, so a fresh `.git` an earlier build left only goes; one holding work stays and is said. A `.git` gone by then, or a plain window's folder, is no concern of the guard's.
+    const stale = setup({ followed: [PARENT], anchorGit: FRESH });
+    await stale.guard.activate();
+    assert.deepEqual(stale.events, [`remove ${ANCHOR}`]);
+    assert.ok(stale.logs.some((line) => line.includes("cleared the fresh .git")));
+    const staleWorked = setup({ followed: [PARENT], anchorGit: { ...FRESH, hasIndex: true } });
+    await staleWorked.guard.activate();
+    assert.deepEqual(staleWorked.events, []);
+    assert.ok(staleWorked.logs.some((line) => line.includes("alone")));
+    const plainAnchor = setup({ navigator: false, followed: [PARENT], anchorGit: FRESH });
+    await plainAnchor.guard.activate();
+    plainAnchor.anchorEntry.fire();
+    await flush();
+    assert.deepEqual(plainAnchor.events, []);
+
+    // With no followed folder there is nothing to initialise, and a followed folder with a `.git` is only opened, never initialised over.
+    const noFollowed = setup();
+    await noFollowed.guard.activate();
+    noFollowed.state.anchorGit = FRESH;
+    noFollowed.anchorEntry.fire();
+    await flush();
+    assert.deepEqual(noFollowed.events, [`remove ${ANCHOR}`]);
+    const followedGit = setup({ followed: [PARENT], followedHasGit: true });
+    await followedGit.guard.activate();
+    followedGit.state.anchorGit = FRESH;
+    followedGit.anchorEntry.fire();
+    await flush();
+    assert.deepEqual(followedGit.events, [`remove ${ANCHOR}`, "open"]);
+
+    // A listed followed folder would open nothing, so its entry goes before the `init`.
+    const listedFollowed = setup({ followed: [PARENT], state: "uninitialized", settings: { ignoredRepositories: [PARENT] } });
+    await listedFollowed.guard.activate();
+    listedFollowed.state.anchorGit = FRESH;
+    listedFollowed.anchorEntry.fire();
+    await flush();
+    assert.deepEqual(listedFollowed.events, [`remove ${ANCHOR}`, UNLISTED, `init ${PARENT}`]);
+
+    // A `git init` in a space the user has only just moved to is not what they picked, so the `.git` goes and nothing replaces it.
+    const movedOn = setup({ followed: [PARENT], holdSettle: true });
+    await movedOn.guard.activate();
+    movedOn.state.anchorGit = FRESH;
+    movedOn.anchorEntry.fire();
+    await flush();
+    movedOn.state.folders = [ANCHOR, REPO_A];
+    movedOn.folderChange.fire();
+    movedOn.runSettles();
+    await flush();
+    assert.deepEqual(movedOn.events, [`remove ${ANCHOR}`]);
+
+    // A removal failing once, as `git init`'s own writes can hold it, waits and tries again; failing twice is logged and initialises nothing, since the anchor still holds the `.git`.
+    const busyOnce = setup({ followed: [PARENT], removeFailures: 1, holdSettle: true });
+    await busyOnce.guard.activate();
+    busyOnce.state.anchorGit = FRESH;
+    busyOnce.anchorEntry.fire();
+    await flush();
+    busyOnce.settles[0]?.();
+    await flush();
+    assert.deepEqual(busyOnce.events, [], "the retry waits for its own settle");
+    busyOnce.settles[1]?.();
+    await flush();
+    assert.deepEqual(busyOnce.events, redirected);
+    const busyTwice = setup({ followed: [PARENT], removeFailures: 2 });
+    await busyTwice.guard.activate();
+    busyTwice.state.anchorGit = FRESH;
+    busyTwice.anchorEntry.fire();
+    await flush();
+    assert.deepEqual(busyTwice.events, []);
+    assert.ok(busyTwice.logs.some((line) => line.includes("could not hand Git's Initialize pick on") && line.includes("EBUSY")));
+
+    // An `init` that fails or opens nothing is said in the log; the view stays on Git's own Initialize text.
+    const initOutcomes: Array<[Options["init"], string]> = [
+      [async () => null, `scm: Git opened no repository at ${PARENT} after initialising it`],
+      [async () => Promise.reject(new Error("spawn failed")), "scm: could not hand Git's Initialize pick on to the followed folder: spawn failed"],
+    ];
+    for (const [init, line] of initOutcomes) {
+      const failedInit = setup({ followed: [PARENT], init });
+      await failedInit.guard.activate();
+      failedInit.state.anchorGit = FRESH;
+      failedInit.anchorEntry.fire();
+      await flush();
+      assert.ok(failedInit.logs.includes(line));
+    }
+
     // Dispose leaves no listener behind on Git's events.
     retained.guard.dispose();
     assert.equal(retained.opened.count(), 0);
     assert.equal(retained.gitEntry.count(), 0);
+    assert.equal(retained.anchorEntry.count(), 0);
   });
 });

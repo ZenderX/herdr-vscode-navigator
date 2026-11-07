@@ -1,4 +1,5 @@
 import type { Logger } from "../herdr";
+import { errorText } from "../log";
 import { samePath } from "../paths";
 import type { FolderLike, FolderPlan } from "./planFolders";
 import { resolveMutation } from "./resolveMutation";
@@ -10,6 +11,8 @@ export interface PlanEffects {
   convert: (anchorPath: string, target: string) => Promise<boolean>;
   /** The in-place index edit; never reloads. A folder without a name shows its basename. */
   updateFolders: (kind: string, start: number, deleteCount: number, add: FolderLike[]) => Promise<boolean>;
+  /** Awaited before a `replace` or `reclaim` swap, which goes ahead however this ends. */
+  prepareSwitch?: (target: string) => Promise<void>;
 }
 
 /** Only the target, the last added path, can carry a display name. */
@@ -118,6 +121,14 @@ export async function applyFolderPlan(
     return plan.kind !== "reclaim";
   }
   const { start, deleteCount, add } = mutation;
+
+  if (plan.kind === "replace" || plan.kind === "reclaim") {
+    try {
+      await effects.prepareSwitch?.(add[add.length - 1]);
+    } catch (err: unknown) {
+      log("warn", `prepare switch: ${errorText(err)}; swapping anyway`);
+    }
+  }
 
   if (plan.kind !== "convert") return effects.updateFolders(plan.kind, start, deleteCount, namedFolders(add, plan.kind === "remove" ? undefined : plan.name));
 

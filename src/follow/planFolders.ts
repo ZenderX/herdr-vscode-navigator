@@ -44,12 +44,13 @@ export type WorkspaceFilePlan =
   | { action: "legacy-untitled" }
   | { action: "none" };
 
-/** Written into the navigator workspace file: workspace settings override the user's, and these stop every second repository except folder roots. */
-export const NAVIGATOR_GIT_SETTINGS = {
+/** Written into the navigator workspace file: workspace settings override the user's. The `git` keys stop every second repository except folder roots, and the `scm` key keeps a newly opened repository out of Changes until the old one goes. */
+export const NAVIGATOR_WORKSPACE_SETTINGS = {
   "git.autoRepositoryDetection": false,
   "git.detectSubmodules": false,
   "git.detectWorktrees": false,
   "git.openRepositoryInParentFolders": "always",
+  "scm.repositories.selectionMode": "single",
 } as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,7 +76,7 @@ export function hasAnchorFirst(existing: string, anchorPath: string, platform: N
   return typeof firstPath === "string" && samePath(firstPath, anchorPath, platform);
 }
 
-/** Workspace file JSON; the anchor stays first because changing index 0 restarts the extension host. Every other key of an existing file (settings such as `window.title`) is kept, and a Git setting it already has wins over `NAVIGATOR_GIT_SETTINGS`. */
+/** Workspace file JSON; the anchor stays first because changing index 0 restarts the extension host. Every other key of an existing file (settings such as `window.title`) is kept, and a setting it already has wins over `NAVIGATOR_WORKSPACE_SETTINGS`. */
 export function navigatorWorkspaceContent(anchorPath: string, target: string, platform: NodeJS.Platform, existing?: string): string {
   const paths = samePath(anchorPath, target, platform) ? [anchorPath] : [anchorPath, target];
   const file = parseObject(existing);
@@ -84,7 +85,7 @@ export function navigatorWorkspaceContent(anchorPath: string, target: string, pl
     {
       ...file,
       folders: paths.map((path) => ({ path })),
-      settings: { ...NAVIGATOR_GIT_SETTINGS, ...(isRecord(settings) ? settings : {}) },
+      settings: { ...NAVIGATOR_WORKSPACE_SETTINGS, ...(isRecord(settings) ? settings : {}) },
     },
     null,
     2,

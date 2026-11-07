@@ -3,6 +3,7 @@ import { describe, it } from "mocha";
 import { applyFolderPlan, applyPendingTakeover } from "../../../follow/applyFolderPlan";
 import type { HostingHandoff, PlanEffects } from "../../../follow/applyFolderPlan";
 import { planFolders } from "../../../follow/planFolders";
+import type { FolderPlan } from "../../../follow/planFolders";
 
 const ANCHOR = "C:\\storage\\anchor";
 const PROJECT = "C:\\work\\project";
@@ -14,6 +15,7 @@ function setup(folders: string[], hosts: boolean): { calls: string[]; effects: P
     calls,
     effects: {
       openFolders: () => folders,
+      prepareSwitch: (target) => Promise.resolve(void calls.push(`prepare ${target}`)),
       convert: (anchor, target) => Promise.resolve(void calls.push(`convert ${anchor} ${target}`)).then(() => true),
       updateFolders: (kind, start, deleteCount, add) =>
         Promise.resolve(
@@ -72,7 +74,7 @@ describe("applyPendingTakeover", () => {
 });
 
 describe("applyFolderPlan", () => {
-  it("records the takeover before a plain window converts, and follows a saved navigator with the index-1 replace only", async () => {
+  it("records the takeover before a plain window converts, follows a saved navigator with the index-1 replace only, and prepares only a swap that departs a folder", async () => {
     const convert = planFolders({ folders: [{ path: PROJECT }], trackedPath: null, anchorPath: ANCHOR, target: TARGET, isMultiRoot: false, platform: "win32" });
     const hosting = apply([PROJECT], true, convert);
     assert.equal(await hosting.done, true);
@@ -85,13 +87,61 @@ describe("applyFolderPlan", () => {
     const plan = planFolders({ folders: folders.map((path) => ({ path })), trackedPath: PROJECT, anchorPath: ANCHOR, target: TARGET, isMultiRoot: true, platform: "win32" });
     const s = apply(folders, true, plan);
     assert.equal(await s.done, true);
-    assert.deepEqual(s.calls, [`update replace 1 1 ${TARGET}`]);
+    assert.deepEqual(s.calls, [`prepare ${TARGET}`, `update replace 1 1 ${TARGET}`]);
 
     // The rename re-adds the open slot's own path, which the mutation must not drop as already present.
     const slot = [ANCHOR, TARGET];
     const rename = planFolders({ folders: [{ path: ANCHOR }, { path: TARGET, name: "target" }], trackedPath: TARGET, anchorPath: ANCHOR, target: TARGET, targetName: "mainproj", isMultiRoot: true, platform: "win32" });
     const renamed = apply(slot, true, rename);
     assert.equal(await renamed.done, true);
-    assert.deepEqual(renamed.calls, [`update replace 1 1 ${TARGET} as mainproj`]);
+    assert.deepEqual(renamed.calls, [`prepare ${TARGET}`, `update replace 1 1 ${TARGET} as mainproj`]);
+
+    const replacePlan: FolderPlan = { kind: "replace", index: 1, add: [TARGET] };
+    const reclaimPlan: FolderPlan = { kind: "reclaim", index: 1, deleteCount: 2, add: [PROJECT, TARGET] };
+
+    // A held prepare must hold the swap, or the departed repository closes before the target's opens.
+    for (const held of [replacePlan, reclaimPlan]) {
+      const h = setup(folders, true);
+      let release = (): void => undefined;
+      h.effects.prepareSwitch = (target) => {
+        h.calls.push(`prepare ${target}`);
+        return new Promise((resolve) => (release = resolve));
+      };
+      const done = applyFolderPlan(held, h.effects, h.handoff, "win32", () => undefined);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(h.calls, [`prepare ${TARGET}`]);
+      release();
+      assert.equal(await done, true);
+      assert.equal(h.calls.length, 2);
+      assert.match(h.calls[1], new RegExp(`^update ${held.kind} 1 `));
+    }
+
+    // No departed repository, no target, or nothing to swap: none of these may wait on Git.
+    const unprepared: Array<{ plan: FolderPlan; calls: string[] }> = [
+      { plan: { kind: "noop", reason: "same" }, calls: [] },
+      { plan: { kind: "append", index: 1, add: [TARGET] }, calls: [`update append 1 0 ${TARGET}`] },
+      { plan: { kind: "remove", index: 1, deleteCount: 1 }, calls: ["update remove 1 1 "] },
+    ];
+    for (const { plan: other, calls } of unprepared) {
+      const o = apply([ANCHOR, PROJECT], true, other);
+      assert.equal(await o.done, true);
+      assert.deepEqual(o.calls, calls);
+    }
+    const alreadyOpen = apply([ANCHOR, PROJECT, TARGET], true, replacePlan);
+    assert.equal(await alreadyOpen.done, true);
+    assert.deepEqual(alreadyOpen.calls, []);
+
+    // A failed open must not strand the window on the old folder.
+    const rejecting = setup(folders, true);
+    rejecting.effects.prepareSwitch = () => Promise.reject(new Error("open failed"));
+    const warnings: string[] = [];
+    assert.equal(await applyFolderPlan(replacePlan, rejecting.effects, rejecting.handoff, "win32", (_level, line) => void warnings.push(line)), true);
+    assert.deepEqual(rejecting.calls, [`update replace 1 1 ${TARGET}`]);
+    assert.deepEqual(warnings, ["prepare switch: open failed; swapping anyway"]);
+
+    const unbound = setup(folders, true);
+    delete unbound.effects.prepareSwitch;
+    assert.equal(await applyFolderPlan(replacePlan, unbound.effects, unbound.handoff, "win32", () => undefined), true);
+    assert.deepEqual(unbound.calls, [`update replace 1 1 ${TARGET}`]);
   });
 });
