@@ -186,7 +186,7 @@ const listed = (...entries: string[]): string => `update ignoredRepositories=${e
 const UNLISTED = "update ignoredRepositories=undefined";
 
 describe("createScmGuard", () => {
-  it("drops every repository but the followed space's, never loops or strands Git disabled, stays a logged no-op when Git is unavailable, opens only the followed folder's new repository, opens the next space's repository first within a bound, and hands a misplaced Initialize pick on to the followed folder", async () => {
+  it("stays a logged no-op when Git is unavailable, writes only the settings that differ, and leaves a plain window alone", async () => {
     // No Git to work with: follow goes on, nothing is written, and each cause says why once.
     for (const extension of ["missing", "throws"] as const) {
       const unavailable = setup({ extension, followed: [REPO_A], settings: { autoRepositoryDetection: undefined } });
@@ -217,7 +217,9 @@ describe("createScmGuard", () => {
     const plain = setup({ navigator: false, followed: [REPO_A], roots: [REPO_B], settings: { detectSubmodules: undefined } });
     await plain.guard.activate();
     assert.deepEqual(plain.events, []);
+  });
 
+  it("drops every repository but the followed space's, holds what it cannot drop without looping, compares roots by real path, and leaves no Git listener after dispose", async () => {
     // Switching away from repoA with an editor open keeps its root listed: dropped one macrotask later, record around both writes.
     const retained = setup({ followed: [REPO_A], roots: [REPO_A], holdSettle: true });
     await retained.guard.activate();
@@ -372,6 +374,14 @@ describe("createScmGuard", () => {
     await folderGone.guard.activate();
     assert.deepEqual(folderGone.events, [listed(REPO_B), ...FULL_TOGGLE]);
 
+    // Dispose leaves no listener behind on Git's events.
+    retained.guard.dispose();
+    assert.equal(retained.opened.count(), 0);
+    assert.equal(retained.gitEntry.count(), 0);
+    assert.equal(retained.anchorEntry.count(), 0);
+  });
+
+  it("never strands Git disabled through rejected writes, folder changes during a pass, or a leftover false", async () => {
     // A rejected false-write wrote nothing, so the record must not claim a value it does not own.
     const noFalse = setup({ followed: [PARENT], roots: [NESTED], updateFails: (key, value) => key === "enabled" && value === false });
     await noFalse.guard.activate();
@@ -528,7 +538,9 @@ describe("createScmGuard", () => {
       assert.equal(noModel.configChange.count(), 0, fire);
       assert.equal(noModel.saved.count(), 0, fire);
     }
+  });
 
+  it("opens only the followed folder's new repository, once its entry is lifted, and says when the open fails", async () => {
     // Detection is off, so only this event shows a repository the followed folder gains; opening before `git init` has filled `.git` would find none.
     const gained = setup({ followed: [PARENT], holdSettle: true });
     await gained.guard.activate();
@@ -596,7 +608,9 @@ describe("createScmGuard", () => {
     openFails.gitEntry.fire(uri(PARENT));
     await flush();
     assert.ok(openFails.logs.some((line) => line.includes("spawn failed")));
+  });
 
+  it("opens the next space's repository first within a bound, and never fails the switch", async () => {
     // Open first: the target's entry goes before the open, as a listed root opens nothing, while another space's entry stays; the open event of the target is not a stray's, so the old repository stays with it and nothing toggles.
     const incoming = setup({ followed: [REPO_A], roots: [REPO_A], settings: { ignoredRepositories: [REPO_B, NESTED] } });
     await incoming.guard.activate();
@@ -713,7 +727,9 @@ describe("createScmGuard", () => {
     await outrun.guard.activate();
     await outrun.guard.prepareSwitch(REPO_B, () => true);
     assert.deepEqual(outrun.openCalls, []);
+  });
 
+  it("hands a misplaced Initialize pick on to the followed folder, removing only a fresh .git from the anchor", async () => {
     // Enter on Git's pick lands in the anchor, where Git never opens it: the removal comes before the `init`, once `git init` has had the wait after its last event, so either pick attaches the followed folder, on the branch Git's own command would start from the user's settings.
     const FRESH: GitDirLook = { isDirectory: true, hasHead: true, hasHeadRef: false, hasPackedRefs: false, hasIndex: false };
     const picked = setup({ followed: [PARENT], holdSettle: true, globals: { defaultBranchName: "my branch", branchWhitespaceChar: "_" } });
@@ -825,11 +841,5 @@ describe("createScmGuard", () => {
       await flush();
       assert.ok(failedInit.logs.includes(line));
     }
-
-    // Dispose leaves no listener behind on Git's events.
-    retained.guard.dispose();
-    assert.equal(retained.opened.count(), 0);
-    assert.equal(retained.gitEntry.count(), 0);
-    assert.equal(retained.anchorEntry.count(), 0);
   });
 });

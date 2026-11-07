@@ -112,20 +112,6 @@
           "scope": "window",
           "description": "Which pane directory to follow. auto uses the foreground process directory when known, else the pane directory."
         },
-        "herdrNavigator.followMode": {
-          "type": "string",
-          "enum": [
-            "folder",
-            "workspace"
-          ],
-          "enumDescriptions": [
-            "Open the followed directory as the window's single folder. Reloads the window on every switch, which closes integrated terminals.",
-            "Keep the window and add the followed directory to a multi-root workspace next to an extension-owned empty anchor folder. No reloads."
-          ],
-          "default": "workspace",
-          "scope": "window",
-          "description": "How the window follows the focused herdr pane."
-        },
         "herdrNavigator.followGitRoot": {
           "type": "boolean",
           "default": true,

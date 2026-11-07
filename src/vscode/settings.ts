@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 import type { CwdSource } from "../follow";
-import { parseFollowMode, type FollowMode } from "../follow/followMode";
 
 export interface Settings {
   autoFollow: boolean;
@@ -10,7 +9,6 @@ export interface Settings {
   cwdPollMs: number;
   liveCwdProbe: boolean;
   gitBashPath: string;
-  followMode: FollowMode;
   followGitRoot: boolean;
 }
 
@@ -26,7 +24,6 @@ export function readSettings(): Settings {
     cwdPollMs: config.get<number>("cwdPollMs", 1000),
     liveCwdProbe: config.get<boolean>("liveCwdProbe", true),
     gitBashPath: config.get<string>("gitBashPath", ""),
-    followMode: parseFollowMode(config.get<unknown>("followMode")),
     followGitRoot: config.get<boolean>("followGitRoot", true),
   };
 }

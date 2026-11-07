@@ -31,12 +31,7 @@ code --install-extension z3nder.herdr-navigator
 
 Start herdr in the integrated terminal. The window then follows the folder of whichever pane herdr focuses.
 
-`herdrNavigator.followMode` sets how the window switches folders.
-
-| Mode | Behavior |
-|---|---|
-| `workspace` (default) | The first switch reloads the window once and converts it into a saved navigator workspace. It holds an empty folder owned by the extension and the followed folder. Later switches replace the followed folder in place, with no reload. |
-| `folder` | The followed folder becomes the window's only folder. Every switch reloads the window and closes the integrated terminal, including the herdr client. The herdr session keeps running. |
+The first switch reloads the window once and converts it into a saved navigator workspace. It holds an empty folder owned by the extension and the followed folder. Later switches replace the followed folder in place, with no reload.
 
 Only the window that hosts herdr follows automatically. "Herdr: Follow Focused Pane Now" works in any window.
 
@@ -48,15 +43,13 @@ herdr 0.9.5 restores each pane in the folder it was spawned in, not the one its 
 
 ## Source Control
 
-In `workspace` mode Source Control keeps the selected space's repository, the longest open one that equals or contains the followed folder, and drops every other one each time it opens, including one you open by hand. The editor tab of a dropped repository stays. The navigator workspace file holds the Git settings and the `git.ignoredRepositories` list this uses, and they override yours in that window only; following a space takes its repository off the list. With `herdrNavigator.followGitRoot` off, the exact folder is followed and its parent repository shows.
+Source Control keeps the selected space's repository, the longest open one that equals or contains the followed folder, and drops every other one each time it opens, including one you open by hand. The editor tab of a dropped repository stays. The navigator workspace file holds the Git settings and the `git.ignoredRepositories` list this uses, and they override yours in that window only; following a space takes its repository off the list. With `herdrNavigator.followGitRoot` off, the exact folder is followed and its parent repository shows.
 
-A switch opens the new repository first and swaps the folder after, so the Changes view goes straight from the old repository to the new one. Explorer and the window title therefore change later, by the time the repository takes to open and by 2 seconds at most; a space without Git swaps with no wait. If you enable the Repositories pane, hidden by default, it shows both repositories for under 100 ms as measured.
+A switch opens the new repository first and swaps the folder after, so the Changes view goes straight from the old repository to the new one. Explorer and the window title therefore change later, by the time the repository takes to open and by 2 seconds at most; a space without Git swaps with no wait. If you enable the Repositories pane, hidden by default, it shows both repositories for under 200 ms as measured.
 
 One exception stays: any repository under a folder whose own `.vscode/settings.json` sets `git.enabled: true`, whether a folder you add by hand or a repository nested in the followed folder. That folder setting outranks the workspace setting, so VS Code never closes it. It goes at the next switch to another folder, which takes that folder out of the window, and the log has `scm: left open`.
 
 A space without Git shows VS Code's built-in "Publish to GitHub" block and Git's own Initialize Repository button. Its folder pick also lists the extension's empty folder, first and selected. Either pick attaches the followed folder's repository with no reload: a fresh `.git` the empty folder's pick creates is removed and the followed folder is initialized instead, which takes about a second longer. A `git init` in the space's terminal shows the new repository within about two seconds, with no switch.
-
-`followMode: folder` is a plain folder window, so none of this applies there.
 
 ## Optional herdr plugin
 
@@ -81,7 +74,6 @@ The key binding is a chord because VS Code handles chords even while the herdr t
 | Setting | Default | Description |
 |---|---|---|
 | `herdrNavigator.autoFollow` | `true` | Follow herdr focus changes automatically. |
-| `herdrNavigator.followMode` | `workspace` | `workspace` or `folder`, as described above. |
 | `herdrNavigator.followGitRoot` | `true` | Follow the Git repository root instead of the exact directory. |
 | `herdrNavigator.autoLaunch` | `true` | Relaunch herdr when VS Code restores a navigator window in which herdr was running. |
 | `herdrNavigator.cwdSource` | `auto` | Which pane directory to follow: `auto`, `pane` or `foreground`. |
@@ -95,11 +87,11 @@ The key binding is a chord because VS Code handles chords even while the herdr t
 
 - Focus changes are followed at once. A `cd` inside the focused pane is followed when herdr reports it, which Git Bash's stock prompt does through the terminal title. A prompt that sets no title (starship, a custom `PS1`) fires no event on `cd`, so that `cd` is followed at the next focus, pane or tab change.
 - herdr runs one server per user, so every window that hosts herdr follows the same focus.
-- In `workspace` mode the empty folder owned by the extension appears as an extra root.
+- The empty folder owned by the extension appears as an extra root.
 - Returning panes runs only from the navigator window, and only for a server whose panes that window recorded while connected to it. A restored Git Bash pane is returned as soon as its shell process exists and is idle, with no wait for a prompt; herdr itself restores PowerShell panes in their live folder. A busy pane (a login shell still running its profile or prompt commands counts as busy) is checked again every second. A pane not ready within 20 seconds (Git Bash: its shell process cannot be found yet; other shells: no first prompt yet) is skipped as `not-ready`, and one still busy then as `busy-timeout`; both keep their recorded folder, so the next VS Code start or herdr server restart returns them. A restart while VS Code is closed is caught on the next start, because the restored panes have new shell process ids; the first start after upgrading cannot tell yet, since the old record holds no process ids.
 - herdr fires no event on a `cd` or on a server stop, so a pane's folder is recorded at the next event. A `cd` under a prompt that sets no title (starship, a custom `PS1`), followed by a server stop with no other event in between, is missed: the pane returns to its earlier recorded folder or stays in its spawn folder, never in another pane's folder. With the herdr plugin installed this applies to Git Bash's stock prompt too, because the plugin has no hook for title changes. The source fix is [herdr issue #5199](https://github.com/herdrdev/herdr/issues/5199).
 - A pane is skipped as `unknown-spawn` when its spawn folder is unknown before or after the restart, and as `mismatch` when herdr gave its id to a pane spawned in a different folder; both stay in the folder herdr chose. Skip reasons, in order: `no-pane`, `same`, `unknown-spawn`, `mismatch`, `missing-folder`, `agent`, `not-ready`, `busy-timeout`, `error`. After upgrading from 0.1.3, let VS Code connect once to the running herdr server before its next restart, or every pane is skipped as `unknown-spawn` that time. Re-ordering spaces, tabs or panes is safe: herdr keeps pane ids.
-- Source Control in `workspace` mode: besides the exception under [Source Control](#source-control), the extension stops dropping a repository Git has brought back after four drops in 10 seconds, logs `scm: left open`, and drops it again at a later event. While the navigator workspace file has unsaved changes, a drop waits for the save. The [changelog](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/CHANGELOG.md) lists the smaller limits.
+- Source Control: besides the exception under [Source Control](#source-control), the extension stops dropping a repository Git has brought back after four drops in 10 seconds, logs `scm: left open`, and drops it again at a later event. While the navigator workspace file has unsaved changes, a drop waits for the save. The [changelog](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/CHANGELOG.md) lists the smaller limits.
 
 ## Troubleshooting
 

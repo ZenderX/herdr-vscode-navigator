@@ -2,9 +2,7 @@ import { resolveCwd } from "../cwd/liveCwd";
 import type { ProbeResult, ResolvedCwd } from "../cwd/types";
 import type { Logger, PaneInfo, SessionSnapshot } from "../herdr";
 import { errorText } from "../log";
-import type { FollowMode } from "./followMode";
 import { findGitRoot, worktreeParentName } from "./gitRoot";
-import { planFollowAction } from "./planFollow";
 import { planFolders } from "./planFolders";
 import type { FolderLike, FolderPlan } from "./planFolders";
 import { findFocusedPane, resolveTarget } from "./resolveTarget";
@@ -37,12 +35,6 @@ export interface FollowControllerOptions {
   applyPlan: (plan: FolderPlan, isCurrent: () => boolean) => Promise<boolean>;
   /** Called before a convert plan, which restarts the extension host. */
   persistPendingTarget: (target: string) => Promise<void>;
-  /** Defaults to workspace mode. */
-  mode?: FollowMode;
-  /** True when this activation follows our own folder switch: the first evaluation must not switch again. */
-  suppressFirstSwitch?: boolean;
-  /** Folder mode: persists the target, then opens it as the single folder. Resolves false when rejected; isCurrent turns false if the decision went stale while it waited. */
-  switchFolder: (target: string, isCurrent: () => boolean) => Promise<boolean>;
   /** Checks whether `<dir>/.git` exists; with followGitRoot on, the target snaps to the nearest ancestor that has one. */
   hasGitEntry?: (dir: string) => Promise<boolean>;
   /** Contents of a file; undefined when it is missing or a directory. Names a linked-worktree root after its parent project. */
@@ -98,9 +90,7 @@ export class FollowController {
   private debounceMs: number;
   private cwdSource: CwdSource;
   private liveEnabled: boolean;
-  private mode: FollowMode;
   private gitRootEnabled: boolean;
-  private suppressFirstSwitch: boolean;
   private trackedPath: string | null = null;
   private trackedName: string | undefined;
   private lastTarget: string | null = null;
@@ -118,13 +108,11 @@ export class FollowController {
     this.debounceMs = options.debounceMs;
     this.cwdSource = options.cwdSource;
     this.liveEnabled = options.live?.enabled ?? false;
-    this.mode = options.mode ?? "workspace";
     this.gitRootEnabled = options.followGitRoot ?? false;
-    this.suppressFirstSwitch = options.suppressFirstSwitch ?? false;
     this.clock = options.clock ?? realClock;
   }
 
-  /** Clears the debounce timer; no plan or folder switch is applied afterwards. */
+  /** Clears the debounce timer; no plan is applied afterwards. */
   dispose(): void {
     this.disposed = true;
     this.cancelTimer();
@@ -149,10 +137,6 @@ export class FollowController {
 
   setFollowGitRoot(value: boolean): void {
     this.gitRootEnabled = value;
-  }
-
-  setMode(mode: FollowMode): void {
-    this.mode = mode;
   }
 
   /** Restores the tracked slot after an extension-host restart or workspace reopen. */
@@ -256,25 +240,6 @@ export class FollowController {
       const { target, name } = followed;
       this.lastTarget = target;
 
-      const action = planFollowAction({
-        mode: this.mode,
-        folders: this.options.getFolders(),
-        isMultiRoot: this.options.isMultiRoot(),
-        target,
-        platform: this.options.platform,
-      });
-      // Consumed by the first evaluation after a self-inflicted reload, whatever it decides.
-      const suppressed = this.suppressFirstSwitch;
-      this.suppressFirstSwitch = false;
-      log?.(
-        "info",
-        `decision: mode=${this.mode} current=${this.options.getFolders().map(({ path }) => path).join(", ") || "(none)"} target=${target} action=${action.kind}${suppressed && action.kind === "openFolder" ? " (suppressed after own reload)" : ""}`,
-      );
-      if (action.kind === "noop") return;
-      if (action.kind === "openFolder") {
-        await this.applyFolderMode(target, suppressed);
-        return;
-      }
       await this.applyWorkspacePlan(target, name);
     } catch (err: unknown) {
       this.lastError = err instanceof Error ? err.message : String(err);
@@ -322,25 +287,9 @@ export class FollowController {
     return { target, name };
   }
 
-  // A newer focus (pending timer or rerun), a mode change, auto-follow turned off or dispose makes a decision stale.
-  private isCurrent(mode: FollowMode): boolean {
-    return !this.disposed && this.mode === mode && (this.cycleForced || this.autoFollow) && !this.rerun && this.timer === null;
-  }
-
-  private async applyFolderMode(target: string, suppressed: boolean): Promise<void> {
-    const { log } = this.options;
-    if (suppressed && !this.cycleForced) return;
-    if (!this.isCurrent("folder")) {
-      log?.("info", "plan: skipped, superseded (openFolder)");
-      return;
-    }
-    const switched = await this.options.switchFolder(target, () => this.isCurrent("folder"));
-    log?.("info", `mutation: openFolder applied=${switched}`);
-    if (!switched) {
-      log?.("warn", "openFolder skipped");
-      return;
-    }
-    this.lastError = null;
+  // A newer focus (pending timer or rerun), auto-follow turned off or dispose makes a decision stale.
+  private isCurrent(): boolean {
+    return !this.disposed && (this.cycleForced || this.autoFollow) && !this.rerun && this.timer === null;
   }
 
   private async applyWorkspacePlan(target: string, name: string | undefined): Promise<void> {
@@ -357,19 +306,19 @@ export class FollowController {
     });
     log?.("info", `plan: ${describePlan(plan)}`);
     if (plan.kind === "noop") return;
-    if (!this.isCurrent("workspace")) {
+    if (!this.isCurrent()) {
       log?.("info", `plan: skipped, superseded (${plan.kind})`);
       return;
     }
 
     if (plan.kind === "convert") {
       await this.options.persistPendingTarget(target);
-      if (!this.isCurrent("workspace")) {
+      if (!this.isCurrent()) {
         log?.("info", `plan: skipped, superseded (${plan.kind})`);
         return;
       }
     }
-    const applied = await this.options.applyPlan(plan, () => this.isCurrent("workspace"));
+    const applied = await this.options.applyPlan(plan, () => this.isCurrent());
     log?.("info", `mutation: ${plan.kind} applied=${applied}`);
     if (!applied) {
       log?.("warn", `plan rejected: ${plan.kind}`);

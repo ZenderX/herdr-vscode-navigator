@@ -1,16 +1,6 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "mocha";
-import { DEFAULT_FOLLOW_MODE, parseFollowMode } from "../../../follow/followMode";
 import { isLegacyAnchor, selectAnchor } from "../../../vscode/anchorPath";
-
-describe("parseFollowMode", () => {
-  it("accepts folder and workspace, and falls back to workspace, the package.json default, for anything else", () => {
-    assert.equal(parseFollowMode("folder"), "folder");
-    assert.equal(parseFollowMode("workspace"), "workspace");
-    assert.equal(DEFAULT_FOLLOW_MODE, "workspace");
-    for (const value of ["multi", 3, undefined]) assert.equal(parseFollowMode(value), DEFAULT_FOLLOW_MODE, String(value));
-  });
-});
 
 describe("legacy anchor adoption", () => {
   it("adopts a sibling publisher's anchor only from index 0 of the same globalStorage parent", () => {

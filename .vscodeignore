@@ -4,6 +4,7 @@ scripts/**
 docs/**
 .vscode/**
 .claude/**
+.baton/**
 .github/**
 tsconfig.json
 .gitignore

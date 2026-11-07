@@ -4,7 +4,6 @@ export { createHostState, pollIntervalMs } from "./pollGate";
 export { routeHerdrEvent } from "./routeEvent";
 export { isPendingTarget, resumePending } from "./pending";
 export type { PendingTarget } from "./pending";
-export { FOLDER_SWITCH_CONFIRM, FOLDER_SWITCH_NOTICE, openFolderInWindow, switchFolder } from "./switchFolder";
 export { planWorkspaceFile } from "./planFolders";
 export type { FolderLike, FolderPlan } from "./planFolders";
 export { applyFolderPlan } from "./applyFolderPlan";

@@ -15,7 +15,6 @@ import {
   pollIntervalMs,
   resumePending,
   routeHerdrEvent,
-  switchFolder,
 } from "./follow";
 import type { FolderPlan, PendingTarget } from "./follow";
 import { findGitRoot } from "./follow/gitRoot";
@@ -62,7 +61,6 @@ import {
   describeWorkspace,
   getFolders,
   isMultiRoot,
-  openFolder,
   workspaceEffects,
   workspaceFileScheme,
 } from "./vscode/workspaceAdapter";
@@ -74,7 +72,6 @@ const MIGRATION_CONFIRM = "Continue";
 const REACHABLE_TIMEOUT_MS = 500;
 const PENDING_KEY = "herdrNavigator.pending";
 const TRACKED_KEY = "herdrNavigator.tracked";
-const LAST_FOLLOWED_KEY = "herdrNavigator.lastFollowed";
 const TITLE_KEY = "herdrNavigator.windowTitle";
 const TITLE_WRITE_RETRIES = 3;
 const CONFIG_RETRY_DELAY_MS = 250;
@@ -91,17 +88,6 @@ function launchId(log: Logger): string {
   if (pid !== undefined && pid !== "") return pid;
   log("warn", "launch id: VSCODE_PID absent, falling back to sessionId (per window)");
   return vscode.env.sessionId;
-}
-
-// A reload we caused leaves the followed folder open and its path persisted: skip the first switch, then forget it so it cannot suppress forever.
-async function consumeOwnReload(context: vscode.ExtensionContext, platform: NodeJS.Platform, log: Logger): Promise<boolean> {
-  const lastFollowed = context.globalState.get<string>(LAST_FOLLOWED_KEY);
-  if (lastFollowed === undefined) return false;
-  const [onlyFolder] = getFolders();
-  const suppressed = !isMultiRoot() && getFolders().length === 1 && samePath(onlyFolder?.path ?? "", lastFollowed, platform);
-  log("info", `last followed folder ${lastFollowed}; first switch suppressed=${suppressed}`);
-  await context.globalState.update(LAST_FOLLOWED_KEY, undefined);
-  return suppressed;
 }
 
 const absentAs =
@@ -296,7 +282,6 @@ function applySettings(controller: FollowController, settings: Settings): void {
   controller.setAutoFollow(settings.autoFollow);
   controller.setDebounce(settings.debounceMs);
   controller.setCwdSource(settings.cwdSource);
-  controller.setMode(settings.followMode);
   controller.setLiveCwdEnabled(settings.liveCwdProbe);
   controller.setFollowGitRoot(settings.followGitRoot);
 }
@@ -425,7 +410,6 @@ interface ControllerEnv {
   log: Logger;
   /** Live getter: the git bash path is read per probe so a runtime setting change applies without a reload. */
   settings: () => Settings;
-  followedByOwnReload: boolean;
   consent: FollowConsent;
   host: ReturnType<typeof createHostState>;
   autoLaunch: AutoLaunch;
@@ -459,26 +443,6 @@ function createController(env: ControllerEnv): FollowController {
     fetchSnapshot: async () => {
       await env.refreshAnchor();
       return env.fetchSnapshot();
-    },
-    mode: settings.followMode,
-    suppressFirstSwitch: env.followedByOwnReload,
-    switchFolder: async (target, isCurrent) => {
-      if (!(await consent.guardAuto(true))) {
-        log("info", "openFolder skipped: this window is not confirmed to host herdr");
-        return false;
-      }
-      return switchFolder(
-        {
-          confirm: consent.confirmFolderSwitch,
-          isCurrent,
-          persistLastFollowed: (path) => Promise.resolve(context.globalState.update(LAST_FOLLOWED_KEY, path)),
-          openFolder: (path) => {
-            log("info", `openFolder ${path}: if it is already open in another VS Code window, VS Code focuses that window and this window does not reload`);
-            return openFolder(path);
-          },
-        },
-        target,
-      );
     },
     applyPlan: async (plan: FolderPlan, isCurrent) => {
       if (plan.kind !== "noop") {
@@ -626,7 +590,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   log("info", `settings: ${JSON.stringify({ ...settings, socketPath: settings.socketPath !== "", gitBashPath: settings.gitBashPath !== "" })}`);
   let anchorPath = await resolveAnchor(context);
   const platform = process.platform;
-  const followedByOwnReload = await consumeOwnReload(context, platform, log);
   const chosenAnchor = (): AnchorChoice => selectAnchor(getFolders()[0]?.path, anchorPath, context.globalStorageUri.fsPath, platform);
   const isNavigatorWindow = (): boolean => {
     const first = getFolders()[0]?.path;
@@ -640,7 +603,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (shape.action === "legacy-untitled") return "navigator-untitled";
     if (shape.action === "already-saved-navigator") return "navigator-saved";
     const plain = shape.action === "write-file-and-open" && folders.length === 1 && !samePath(folders[0].path, anchor, platform);
-    return plain && settings.followMode === "workspace" ? "single-folder" : "other";
+    return plain ? "single-folder" : "other";
   };
   const windowFolder = (): string | undefined => getFolders()[isNavigatorWindow() ? 1 : 0]?.path;
   const configQueue = createConfigQueue({ delay: () => new Promise((resolve) => setTimeout(resolve, CONFIG_RETRY_DELAY_MS)) });
@@ -669,9 +632,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const consent = createFollowConsent({
     host,
     workspaceState: context.workspaceState,
-    globalState: context.globalState,
     askModal: (message, ...items) => vscode.window.showInformationMessage(message, { modal: true }, ...items),
-    followMode: () => settings.followMode,
     requestHosting,
     refreshStatus: () => refreshStatus(),
   });
@@ -742,7 +703,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     platform,
     log,
     settings: () => settings,
-    followedByOwnReload,
     consent,
     host,
     autoLaunch,

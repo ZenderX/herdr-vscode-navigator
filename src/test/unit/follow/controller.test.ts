@@ -84,7 +84,6 @@ function harness(autoFollow = true, onFetch?: () => void): Harness {
       order.push("persist");
       persisted.push(target);
     },
-    switchFolder: async () => false,
     getFolders: () => folders.value,
     isMultiRoot: () => folders.multi,
     getAnchorPath: () => "C:\\anchor",
@@ -168,7 +167,6 @@ describe("FollowController", () => {
           return true;
         },
         persistPendingTarget: async () => {},
-        switchFolder: async () => false,
         getFolders: () => [{ path: "C:\\anchor" }, { path: "C:\\start" }],
         isMultiRoot: () => true,
         getAnchorPath: () => "C:\\anchor",
@@ -234,7 +232,6 @@ describe("FollowController", () => {
           return true;
         },
         persistPendingTarget: async () => {},
-        switchFolder: async () => false,
         hasGitEntry: async (dir) => dir === layout.repo || dir === layout.worktree,
         readTextFile: async (file) => layout.files[file],
         followGitRoot,

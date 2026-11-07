@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { openFolderInWindow } from "../follow";
 import type { FolderLike, PlanEffects } from "../follow";
 import type { Logger } from "../herdr";
 import { workspaceFilePath } from "./anchorPath";
@@ -58,14 +57,6 @@ function rejectionReason(start: number, deleteCount: number, addCount: number, c
   }
   if (deleteCount === 0 && addCount === 0) return "nothing to add or remove";
   return "a previous update is still unconfirmed, the result would contain a folder twice, or nothing would change";
-}
-
-/** Replaces this window's content with the target folder; VS Code then kills the extension host, so nothing after this may be relied on. */
-export async function openFolder(target: string): Promise<void> {
-  await openFolderInWindow(
-    { executeCommand: (command, ...args) => vscode.commands.executeCommand(command, ...args), fileUri: (path) => vscode.Uri.file(path) },
-    target,
-  );
 }
 
 /** Scheme of the open workspace file (`file` saved, `untitled` legacy), or undefined for a plain folder or empty window. */

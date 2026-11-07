@@ -1,12 +1,10 @@
 import * as assert from "node:assert/strict";
 import { describe, it } from "mocha";
-import { FOLDER_SWITCH_CONFIRM } from "../../../follow/switchFolder";
 import type { HostState } from "../../../hosting";
 import { createFollowConsent } from "../../../vscode/followConsent";
 
 function setup(host: HostState = "unknown") {
   const workspace = new Map<string, unknown>();
-  const global = new Map<string, unknown>();
   const memento = (store: Map<string, unknown>) => ({
     get: <T>(key: string) => store.get(key) as T | undefined,
     update: (key: string, value: unknown) => Promise.resolve(void store.set(key, value)),
@@ -17,7 +15,6 @@ function setup(host: HostState = "unknown") {
   const consent = createFollowConsent({
     host: { get: () => host },
     workspaceState: memento(workspace),
-    globalState: memento(global),
     askModal: async (message) => {
       prompts.push(message);
       await new Promise<void>((resolve) => {
@@ -25,11 +22,10 @@ function setup(host: HostState = "unknown") {
       });
       return answers.shift();
     },
-    followMode: () => "workspace",
     requestHosting: () => Promise.resolve(),
     refreshStatus: () => undefined,
   });
-  return { consent, workspace, global, prompts, answers, answer: () => release?.() };
+  return { consent, workspace, prompts, answers, answer: () => release?.() };
 }
 
 const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -51,23 +47,5 @@ describe("followConsent", () => {
     assert.equal(t.workspace.get("herdrNavigator.followHere"), true);
     assert.equal(await t.consent.guardAuto(false), true);
     assert.equal(t.prompts.length, 1);
-  });
-
-  it("shows the folder-switch notice until the user accepts it once", async () => {
-    const t = setup();
-    t.answers.push(undefined);
-    const declined = t.consent.confirmFolderSwitch();
-    await tick();
-    t.answer();
-    assert.equal(await declined, false);
-    assert.equal(t.global.get("herdrNavigator.folderSwitchNoticeShown"), undefined);
-
-    t.answers.push(FOLDER_SWITCH_CONFIRM);
-    const accepted = t.consent.confirmFolderSwitch();
-    await tick();
-    t.answer();
-    assert.equal(await accepted, true);
-    assert.equal(await t.consent.confirmFolderSwitch(), true);
-    assert.equal(t.prompts.length, 2);
   });
 });
