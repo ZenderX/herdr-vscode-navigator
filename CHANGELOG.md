@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.0 — 2026-11-10
 
 - The `herdrNavigator.followMode` setting is removed, and its `workspace` behaviour is now the only one. A former `folder` user's plain one-folder window can convert to the navigator workspace with no prompt, about 3 s after start, when herdr ran earlier, no navigator window is alive and `herdrNavigator.autoLaunch` is on. A `followMode` value left in settings is harmless and shows dimmed as unnecessary; the extension can't delete it once the setting is unregistered.
 - Source Control now follows the selected herdr space and keeps only that space's repository: the longest open root that equals or contains the followed folder. A followed linked worktree keeps its own repository and its main checkout is dropped. A space with Git shows that repository's changes; a space without Git shows the Initialize offer. This fixes a repository nested in a followed non-repository folder (`C:\Users\me\Projects\parentdir\nestedrepo`, opened by Git's startup scan while `parentdir` was followed) showing, and staying open after the switch away.
