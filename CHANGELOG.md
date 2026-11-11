@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.1 — 2026-11-11
 
 - The README is shorter and shows a demo of switching spaces. Source Control behaviour, the optional herdr plugin, known limitations, troubleshooting and privacy moved to the [user guide](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/user-guide.md).
 
