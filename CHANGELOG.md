@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The README is shorter and shows a demo of switching spaces. Source Control behaviour, the optional herdr plugin, known limitations, troubleshooting and privacy moved to the [user guide](https://github.com/ZenderX/herdr-vscode-navigator/blob/main/docs/user-guide.md).
+
 ## v0.3.0 — 2026-11-10
 
 - The `herdrNavigator.followMode` setting is removed, and its `workspace` behaviour is now the only one. A former `folder` user's plain one-folder window can convert to the navigator workspace with no prompt, about 3 s after start, when herdr ran earlier, no navigator window is alive and `herdrNavigator.autoLaunch` is on. A `followMode` value left in settings is harmless and shows dimmed as unnecessary; the extension can't delete it once the setting is unregistered.
